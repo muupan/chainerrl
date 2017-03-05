@@ -174,9 +174,11 @@ class SoftmaxDistribution(CategoricalDistribution):
             distribution.
     """
 
-    def __init__(self, logits, beta=1.0):
+    def __init__(self, logits, beta=1.0, min_prob=0):
         self.logits = logits
+        self.n = logits.shape[1]
         self.beta = 1.0
+        self.min_prob = min_prob
 
     @property
     def params(self):
@@ -185,12 +187,19 @@ class SoftmaxDistribution(CategoricalDistribution):
     @cached_property
     def all_prob(self):
         with chainer.force_backprop_mode():
-            return F.softmax(self.beta * self.logits)
+            all_prob = F.softmax(self.beta * self.logits)
+            if self.min_prob > 0:
+                all_prob *= 1 - self.min_prob * self.n
+                all_prob += self.min_prob
+            return all_prob
 
     @cached_property
     def all_log_prob(self):
         with chainer.force_backprop_mode():
-            return F.log_softmax(self.beta * self.logits)
+            if self.min_prob > 0:
+                return F.log(self.all_prob)
+            else:
+                return F.log_softmax(self.beta * self.logits)
 
     def copy(self):
         return SoftmaxDistribution(_unwrap_variable(self.logits).copy(),
