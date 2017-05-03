@@ -127,6 +127,7 @@ def main():
         t_max=args.t_max, gamma=0.99,
         tau=args.beta, phi=dqn_phi, train_async=True,
         n_times_replay=args.n_times_replay,
+        replay_start_size=1,
         backprop_future_values=args.backprop_future_values,
     )
 
