@@ -84,6 +84,8 @@ class PCL(agent.AttributeSavingMixin, agent.AsyncAgent):
             default is `chainerrl.misc.batch_states.batch_states`
         backprop_future_values (bool): If set True, value gradients are
             computed not only wrt V(s_t) but also V(s_{t+d}).
+        backprop_future_pi (bool): If set True, policy gradients are
+            computed not only wrt pi(a_t|s_t) but also pi(a_t{d}|s_{t+d}).
         train_async (bool): If set True, use a process-local model to compute
             gradients and update the globally shared model.
     """
@@ -114,6 +116,7 @@ class PCL(agent.AttributeSavingMixin, agent.AsyncAgent):
                  logger=None,
                  batch_states=batch_states,
                  backprop_future_values=True,
+                 backprop_future_pi=True,
                  train_async=False):
 
         if train_async:
@@ -149,6 +152,7 @@ class PCL(agent.AttributeSavingMixin, agent.AsyncAgent):
         self.logger = logger if logger else getLogger(__name__)
         self.batch_states = batch_states
         self.backprop_future_values = backprop_future_values
+        self.backprop_future_pi = backprop_future_pi
         self.train_async = train_async
 
         self.t = 0
@@ -192,7 +196,10 @@ class PCL(agent.AttributeSavingMixin, agent.AsyncAgent):
             R_seq = sum(self.gamma ** i * rewards[t + i] for i in range(d))
             # Discounted sum of log likelihoods
             G = chainerrl.functions.weighted_sum_arrays(
-                xs=[log_probs[t + i] for i in range(d)],
+                xs=[log_probs[t + i]  # Backprop
+                    if i == 0 or self.backprop_future_pi
+                    else log_probs[t + 1].data  # No backprop
+                    for i in range(d)],
                 weights=[self.gamma ** i for i in range(d)])
             G = F.expand_dims(G, -1)
             last_v = next_values[t + d - 1]

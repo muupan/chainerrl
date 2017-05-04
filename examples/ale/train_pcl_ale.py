@@ -92,6 +92,8 @@ def main():
     parser.add_argument('--n-times-replay', type=int, default=1)
     parser.add_argument('--no-backprop-future-values', action='store_false',
                         dest='backprop_future_values')
+    parser.add_argument('--no-backprop-future-pi', action='store_false',
+                        dest='backprop_future_pi')
     parser.set_defaults(use_sdl=False)
     parser.set_defaults(use_lstm=False)
     args = parser.parse_args()
@@ -129,6 +131,7 @@ def main():
         n_times_replay=args.n_times_replay,
         replay_start_size=1,
         backprop_future_values=args.backprop_future_values,
+        backprop_future_pi=args.backprop_future_pi,
     )
 
     if args.load:
