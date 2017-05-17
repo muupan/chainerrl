@@ -22,6 +22,8 @@ def main():
     parser.add_argument('--label', action='append', dest='labels',
                         default=[], type=str,
                         help='specify labels for scores.txt files')
+    parser.add_argument('--steps', type=int, default=None,
+                        help='number of steps as x-axis')
     args = parser.parse_args()
 
     assert len(args.files) > 0
@@ -34,6 +36,9 @@ def main():
         scores = pd.read_csv(fpath, delimiter='\t')
         plt.plot(scores['steps'], scores['mean'], label=label)
 
+    axes = plt.gca()
+    if args.steps:
+        axes.set_xlim([0, args.steps])
     plt.xlabel('steps')
     plt.ylabel('score')
     plt.legend(loc='best')
