@@ -77,7 +77,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('env', type=str)
     parser.add_argument('--outdir', type=str, default=None)
-    parser.add_argument('--seed', type=int, default=None)
+    parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--demo', action='store_true', default=False)
     parser.add_argument('--load', type=str, default=None)
@@ -110,8 +110,10 @@ def main():
 
     # In training, life loss is considered as terminal states
     env = wrap_deepmind(gym.make(args.env), test=False)
+    env.seed(args.seed)
     # In testing, an episode is terminated  when all lives are lost
     eval_env = wrap_deepmind(gym.make(args.env), test=True)
+    eval_env.seed(args.seed)
 
     n_actions = env.action_space.n
     activation = parse_activation(args.activation)
