@@ -152,6 +152,8 @@ def main():
         model = A3CFFSoftmax(obs_space.low.size, action_space.n)
     elif args.arch == 'FFMellowmax':
         model = A3CFFMellowmax(obs_space.low.size, action_space.n)
+    model.pi_and_v(obs_space.sample()[None].astype(np.float32))
+    model.reset_state()
 
     opt = rmsprop_async.RMSpropAsync(
         lr=args.lr, eps=args.rmsprop_epsilon, alpha=0.99)
