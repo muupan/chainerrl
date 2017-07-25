@@ -7,6 +7,9 @@ spaces, A NAF (Normalized Advantage Function) is used to approximate Q-values.
 To solve CartPole-v0, run:
     python train_gym_gym.py --env CartPole-v0
 
+To solve FrozenLake-v0, run:
+    python train_gym_gym.py --env FrozenLake-v0 --reward-scale-factor 1 --adam-eps 0.01  # NOQA
+
 To solve Pendulum-v0, run:
     python train_gym_gym.py --env Pendulum-v0
 """
@@ -28,6 +31,7 @@ from gym import spaces
 import gym.wrappers
 import numpy as np
 
+import chainerrl
 from chainerrl.agents.dqn import DQN
 from chainerrl import experiments
 from chainerrl import explorers
@@ -69,6 +73,7 @@ def main():
     parser.add_argument('--render-eval', action='store_true')
     parser.add_argument('--monitor', action='store_true')
     parser.add_argument('--reward-scale-factor', type=float, default=1e-3)
+    parser.add_argument('--adam-eps', type=float, default=1e-8)
     args = parser.parse_args()
 
     args.outdir = experiments.prepare_output_dir(
@@ -93,6 +98,8 @@ def main():
         if ((args.render_eval and for_eval) or
                 (args.render_train and not for_eval)):
             misc.env_modifiers.make_rendered(env)
+        # Make sure env's observation_space is a Box (arrays of real numbers)
+        env = chainerrl.wrappers.FlattenObservation(env)
         return env
 
     env = make_env(for_eval=False)
@@ -123,7 +130,7 @@ def main():
             args.start_epsilon, args.end_epsilon, args.final_exploration_steps,
             action_space.sample)
 
-    opt = optimizers.Adam()
+    opt = optimizers.Adam(eps=args.adam_eps)
     opt.setup(q_func)
 
     rbuf_capacity = 5 * 10 ** 5
