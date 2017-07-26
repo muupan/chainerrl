@@ -73,6 +73,7 @@ def main():
     parser.add_argument('--render-eval', action='store_true')
     parser.add_argument('--monitor', action='store_true')
     parser.add_argument('--reward-scale-factor', type=float, default=1e-3)
+    parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--adam-eps', type=float, default=1e-8)
     args = parser.parse_args()
 
@@ -130,7 +131,7 @@ def main():
             args.start_epsilon, args.end_epsilon, args.final_exploration_steps,
             action_space.sample)
 
-    opt = optimizers.Adam(eps=args.adam_eps)
+    opt = optimizers.Adam(args.lr, eps=args.adam_eps)
     opt.setup(q_func)
 
     rbuf_capacity = 5 * 10 ** 5
