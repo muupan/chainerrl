@@ -178,7 +178,7 @@ def main():
             eval_n_runs=args.eval_n_runs, eval_interval=args.eval_interval,
             outdir=args.outdir, eval_explorer=eval_explorer,
             eval_env=eval_env,
-            step_hook=epsilon_decay_hook)
+            step_hooks=[epsilon_decay_hook])
 
 
 if __name__ == '__main__':
