@@ -100,6 +100,8 @@ def main():
     parser.set_defaults(clip_delta=True)
     parser.add_argument('--agent', type=str, default='DQN',
                         choices=['DQN', 'DoubleDQN', 'PAL'])
+    parser.add_argument('--replay-type', type=str, default='uniform',
+                        choices=['uniform', 'prioritized',])
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -125,7 +127,17 @@ def main():
 
     opt.setup(q_func)
 
-    rbuf = replay_buffer.ReplayBuffer(10 ** 6)
+    rbuf_capacity = 10 ** 6
+    if args.replay_type == 'uniform':
+        rbuf = replay_buffer.ReplayBuffer(rbuf_capacity)
+    elif args.replay_type == 'prioritized':
+        betasteps = (args.steps - args.replay_start_size) \
+            // args.update_interval
+        rbuf = replay_buffer.PrioritizedReplayBuffer(
+            rbuf_capacity, betasteps=betasteps)
+    else:
+        raise RuntimeError(
+            'Not supported replay type: {}'.format(args.replay_type))
 
     explorer = explorers.LinearDecayEpsilonGreedy(
         1.0, 0.1,
