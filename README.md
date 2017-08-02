@@ -1,3 +1,4 @@
+![ChainerRL](https://raw.githubusercontent.com/chainer/chainerrl/master/assets/ChainerRL.png)
 # ChainerRL
 [![Build Status](https://travis-ci.org/chainer/chainerrl.svg?branch=master)](https://travis-ci.org/pfnet/chainerrl)
 [![Coverage Status](https://coveralls.io/repos/github/chainer/chainerrl/badge.svg?branch=master)](https://coveralls.io/github/chainer/chainerrl?branch=master)
