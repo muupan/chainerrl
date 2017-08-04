@@ -95,6 +95,7 @@ def main():
     parser.add_argument('--update-interval', type=int, default=4)
     parser.add_argument('--activation', type=str, default='relu')
     parser.add_argument('--eval-n-runs', type=int, default=10)
+    parser.add_argument('--minibatch-size', type=int, default=32)
     parser.add_argument('--no-clip-delta',
                         dest='clip_delta', action='store_false')
     parser.set_defaults(clip_delta=True)
@@ -149,7 +150,8 @@ def main():
                   target_update_interval=args.target_update_interval,
                   clip_delta=args.clip_delta,
                   update_interval=args.update_interval,
-                  batch_accumulator='sum', phi=dqn_phi)
+                  batch_accumulator='sum', phi=dqn_phi,
+                  minibatch_size=args.minibatch_size)
 
     if args.load:
         agent.load(args.load)
