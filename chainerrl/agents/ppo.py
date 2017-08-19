@@ -1,3 +1,5 @@
+import logging
+
 import chainer
 from chainer import cuda
 import chainer.functions as F
@@ -64,6 +66,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                  clip_eps_vf=0.2,
                  normalize_advantage=True,
                  average_v_decay=0.999, average_loss_decay=0.99,
+                 logger=logging.getLogger(__name__),
                  ):
         self.model = model
 
@@ -83,6 +86,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.clip_eps = clip_eps
         self.clip_eps_vf = clip_eps_vf
         self.normalize_advantage = normalize_advantage
+        self.logger = logger
 
         self.average_v = 0
         self.average_v_decay = average_v_decay
@@ -104,6 +108,8 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             b_state = batch_states([state], xp, self.phi)
             action_distrib, v = self.model(b_state)
             action = action_distrib.sample()
+            self.logger.debug('act action: %s distrib: %s v: %s',
+                              action.data[0], action_distrib, float(v.data[0]))
             return cuda.to_cpu(action.data)[0], v.data[0]
 
     def _train(self):
@@ -188,6 +194,8 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             advs = np.asarray([float(b['adv']) for b in self.memory])
             mean = np.mean(advs)
             std = np.std(advs)
+            self.logger.debug(
+                'advantage normlization mean: %s std: %s', mean, std)
             for b in self.memory:
                 b['adv'] = (b['adv'] - mean) / std
 
