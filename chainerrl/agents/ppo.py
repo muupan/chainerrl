@@ -137,8 +137,8 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 + (self.gamma * transition['nonterminal']
                    * transition['next_v_pred'])
                 - transition['v_pred']
-                )
-            adv = td_err + self.lambd * adv
+            )
+            adv = td_err + self.gamma * self.lambd * adv
             transition['adv'] = adv
             transition['v_teacher'] = adv + transition['v_pred']
 
@@ -235,7 +235,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 'v_pred': self.last_v,
                 'next_state': state,
                 'next_v_pred': v,
-                'nonterminal': 0.0})
+                'nonterminal': 1.0})
         self.last_state = state
         self.last_action = action
         self.last_v = v
