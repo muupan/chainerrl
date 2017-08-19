@@ -3,6 +3,8 @@ from chainer import cuda
 import chainer.functions as F
 import copy
 
+import numpy as np
+
 
 from chainerrl import agent
 from chainerrl.misc.batch_states import batch_states
@@ -60,6 +62,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                  epochs=10,
                  clip_eps=0.2,
                  clip_eps_vf=0.2,
+                 normalize_advantage=True,
                  average_v_decay=0.999, average_loss_decay=0.99,
                  ):
         self.model = model
@@ -79,6 +82,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.epochs = epochs
         self.clip_eps = clip_eps
         self.clip_eps_vf = clip_eps_vf
+        self.normalize_advantage = normalize_advantage
 
         self.average_v = 0
         self.average_v_decay = average_v_decay
@@ -179,6 +183,13 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         target_model = copy.deepcopy(self.model)
         dataset_iter = chainer.iterators.SerialIterator(
             self.memory, self.minibatch_size)
+
+        if self.normalize_advantage:
+            advs = np.asarray([float(b['adv']) for b in self.memory])
+            mean = np.mean(advs)
+            std = np.std(advs)
+            for b in self.memory:
+                b['adv'] = (b['adv'] - mean) / std
 
         dataset_iter.reset()
         while dataset_iter.epoch < self.epochs:
