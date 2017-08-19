@@ -96,7 +96,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
 
     def _act(self, state, train):
         xp = self.xp
-        with chainer.using_config('train', train):
+        with chainer.using_config('train', train), chainer.no_backprop_mode():
             b_state = batch_states([state], xp, self.phi)
             action_distrib, v = self.model(b_state)
             action = action_distrib.sample()
@@ -160,13 +160,13 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         # Update stats
         self.average_loss_policy += (
             (1 - self.average_loss_decay) *
-            (loss_policy.data - self.average_loss_policy))
+            (float(loss_policy.data) - self.average_loss_policy))
         self.average_loss_value_func += (
             (1 - self.average_loss_decay) *
-            (loss_value_func.data - self.average_loss_value_func))
+            (float(loss_value_func.data) - self.average_loss_value_func))
         self.average_loss_entropy += (
             (1 - self.average_loss_decay) *
-            (loss_entropy.data - self.average_loss_entropy))
+            (float(loss_entropy.data) - self.average_loss_entropy))
 
         return (
             loss_policy
@@ -184,9 +184,10 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         while dataset_iter.epoch < self.epochs:
             batch = dataset_iter.__next__()
             states = batch_states([b['state'] for b in batch], xp, self.phi)
-            actions = xp.array([b['action'] for b in batch], dtype=xp.int32)
+            actions = xp.array([b['action'] for b in batch])
             distribs, vs_pred = self.model(states)
-            target_distribs, _ = target_model(states)
+            with chainer.no_backprop_mode():
+                target_distribs, _ = target_model(states)
             self.optimizer.update(
                 self._lossfun,
                 distribs, vs_pred, distribs.log_prob(actions),
@@ -200,12 +201,12 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 )
 
     def act_and_train(self, state, reward):
-        action, v = self._act(state, train=True)
+        action, v = self._act(state, train=False)
 
         # Update stats
         self.average_v += (
             (1 - self.average_v_decay) *
-            (v[0] - self.average_v))
+            (float(v) - self.average_v))
 
         if self.last_state is not None:
             self.last_episode.append({
@@ -229,12 +230,12 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         # Update stats
         self.average_v += (
             (1 - self.average_v_decay) *
-            (v[0] - self.average_v))
+            (float(v) - self.average_v))
 
         return action
 
     def stop_episode_and_train(self, state, reward, done=False):
-        _, v = self._act(state, train=True)
+        _, v = self._act(state, train=False)
 
         assert self.last_state is not None
         self.last_episode.append({
