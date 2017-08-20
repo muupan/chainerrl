@@ -151,7 +151,9 @@ class FCGaussianPolicyWithStateIndependentCovariance(
                  n_hidden_layers=0, n_hidden_channels=None,
                  min_action=None, max_action=None, bound_mean=False,
                  var_type='spherical',
-                 nonlinearity=F.relu, mean_wscale=1):
+                 nonlinearity=F.relu,
+                 mean_wscale=1,
+                 var_func=F.softplus):
 
         self.n_input_channels = n_input_channels
         self.action_size = action_size
@@ -162,6 +164,7 @@ class FCGaussianPolicyWithStateIndependentCovariance(
         self.bound_mean = bound_mean
         self.nonlinearity = nonlinearity
         var_size = {'spherical': 1, 'diagonal': action_size}[var_type]
+        self.var_func = var_func
 
         layers = []
         layers.append(L.Linear(n_input_channels, n_hidden_channels))
@@ -186,7 +189,7 @@ class FCGaussianPolicyWithStateIndependentCovariance(
     def __call__(self, x):
         mean = self.hidden_layers(x)
         var = F.broadcast_to(
-            F.softplus(self.var_param),
+            self.var_func(self.var_param),
             mean.shape)
         return distribution.GaussianDistribution(mean, var)
 
