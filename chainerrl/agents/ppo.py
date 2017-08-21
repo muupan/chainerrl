@@ -282,4 +282,95 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             ('average_loss_policy', self.average_loss_policy),
             ('average_loss_value_func', self.average_loss_value_func),
             ('average_loss_entropy', self.average_loss_entropy),
-            ]
+        ]
+
+
+class ParallelPPO(PPO):
+
+    def batch_act_and_train(self, states, rewards, dones, interrupts):
+        n_actors = len(states)
+        assert len(rewards) == n_actors
+        assert len(dones) == n_actors
+        assert len(interrupts) == n_actors
+        # Initialization depending on the number of actors
+        if self.last_state is None:
+            self.last_state = [None] * n_actors
+            self.last_action = [None] * n_actors
+            self.last_v = [None] * n_actors
+            self.last_episode = [[] for _ in range(n_actors)]
+        # Select an action for each state
+        with chainer.using_config('train', False), chainer.no_backprop_mode():
+            b_state = batch_states(states, self.xp, self.phi)
+            action_distrib, v = self.model(b_state)
+            actions = cuda.to_cpu(action_distrib.sample().data)
+            v = cuda.to_cpu(v.data)
+        # Update stats
+        self.average_v += (
+            (1 - self.average_v_decay) *
+            (float(v.mean()) - self.average_v))
+        # Put experiences into the buffer
+        for i in range(len(states)):
+            if self.last_state[i] is not None:
+                self.last_episode[i].append({
+                    'state': self.last_state[i],
+                    'action': self.last_action[i],
+                    'reward': rewards[i],
+                    'v_pred': self.last_v[i],
+                    'next_state': states[i],
+                    'next_v_pred': v[i],
+                    'nonterminal': 0. if dones[i] else 1.,
+                    'uninterrupted': 0. if interrupts[i] else 1.,
+                })
+            if dones[i] or interrupts[i]:
+                self.last_state[i] = None
+                self.last_action[i] = None
+                self.last_v[i] = None
+            else:
+                self.last_state[i] = states[i]
+                self.last_action[i] = actions[i]
+                self.last_v[i] = v[i]
+
+        self._batch_train()
+        return actions
+
+    def _batch_train(self):
+        n_transitions = sum(len(ep) for ep in self.last_episode)
+        if n_transitions >= self.update_interval:
+            self._batch_flush_last_episode()
+            self.update()
+            self.memory = []
+
+    def _batch_flush_last_episode(self):
+        self._batch_compute_teacher()
+        for i, seq in enumerate(self.last_episode):
+            assert isinstance(seq, list)
+            assert seq
+            self.memory.extend(seq)
+            self.last_episode[i] = []
+
+    def _batch_compute_teacher(self):
+        """Estimate state values and advantages of self.last_episode
+
+        TD(lambda) estimation
+        """
+        for seq in self.last_episode:
+            adv = 0.0
+            for transition in reversed(seq):
+                reward = transition['reward']
+                if reward is None:
+                    # this must be an initial state
+                    reward = 0.
+                td_err = (
+                    reward
+                    + (self.gamma * transition['nonterminal']
+                       * transition['next_v_pred'])
+                    - transition['v_pred']
+                )
+                adv = (td_err
+                       + (transition['uninterrupted']
+                           * transition['nonterminal']
+                           * self.gamma
+                           * self.lambd
+                           * adv))
+                transition['adv'] = adv
+                transition['v_teacher'] = adv + transition['v_pred']
