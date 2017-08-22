@@ -293,7 +293,10 @@ class ParallelPPO(PPO):
         assert len(dones) == n_actors
         assert len(interrupts) == n_actors
         # Initialization depending on the number of actors
-        if self.last_state is None:
+        if self.last_state is None or len(self.last_state) < n_actors:
+            if self.last_state is not None:
+                self.logger.debug('Number of actors increased from %s to %s.',
+                                  len(self.last_state), n_actors)
             self.last_state = [None] * n_actors
             self.last_action = [None] * n_actors
             self.last_v = [None] * n_actors
