@@ -60,6 +60,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                  value_func_coeff=1.0,
                  entropy_coeff=0.01,
                  update_interval=2048,
+                 update_interval_episodes=-1,
                  minibatch_size=64,
                  epochs=10,
                  clip_eps=0.2,
@@ -81,6 +82,9 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.value_func_coeff = value_func_coeff
         self.entropy_coeff = entropy_coeff
         self.update_interval = update_interval
+        self.update_interval_episodes = update_interval_episodes
+        assert ((self.update_interval > 0)
+                + (self.update_interval_episodes > 0)) == 1
         self.minibatch_size = minibatch_size
         self.epochs = epochs
         self.clip_eps = clip_eps
@@ -101,6 +105,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
 
         self.memory = []
         self.last_episode = []
+        self.n_episodes_in_memory = 0
 
     def _act(self, state, train):
         xp = self.xp
@@ -113,16 +118,22 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             return cuda.to_cpu(action.data)[0], v.data[0]
 
     def _train(self):
+        if self.update_interval > 0 and len(self.memory) + len(self.last_episode) < self.update_interval:
+            return
+        if self.update_interval_episodes > 0 and self.n_episodes_in_memory < self.update_interval_episodes:
+            return
         if len(self.memory) + len(self.last_episode) >= self.update_interval:
             self._flush_last_episode()
             self.update()
             self.memory = []
+            self.n_episodes_in_memory = 0
 
     def _flush_last_episode(self):
         if self.last_episode:
             self._compute_teacher()
             self.memory.extend(self.last_episode)
             self.last_episode = []
+            self.n_episodes_in_memory += 1
 
     def _compute_teacher(self):
         """Estimate state values and advantages of self.last_episode
@@ -182,9 +193,11 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             loss_policy
             + self.value_func_coeff * loss_value_func
             + self.entropy_coeff * loss_entropy
-            )
+        )
 
     def update(self):
+        self.logger.debug('update memory: %s', len(self.memory))
+        assert self.memory
         xp = self.xp
         target_model = copy.deepcopy(self.model)
         dataset_iter = chainer.iterators.SerialIterator(
@@ -271,6 +284,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         del self.last_v
 
         self._flush_last_episode()
+        self._train()
         self.stop_episode()
 
     def stop_episode(self):
@@ -333,30 +347,52 @@ class ParallelPPO(PPO):
                 self.last_action[i] = actions[i]
                 self.last_v[i] = v[i]
 
+        if self.update_interval_episodes > 0:
+            self._batch_flush_last_episode(True)
         self._batch_train()
         return actions
 
     def _batch_train(self):
         n_transitions = sum(len(ep) for ep in self.last_episode)
-        if n_transitions >= self.update_interval:
+        if self.update_interval > 0 and n_transitions < self.update_interval:
+            return
+        if self.update_interval_episodes > 0 and self.n_episodes_in_memory < self.update_interval_episodes:
+            return
+        if self.update_interval > 0:
             self._batch_flush_last_episode()
-            self.update()
-            self.memory = []
+        self.update()
+        self.memory = []
+        self.n_episodes_in_memory = 0
 
-    def _batch_flush_last_episode(self):
-        self._batch_compute_teacher()
+    def _batch_flush_last_episode(self, finished_episodes_only=False):
+        self._batch_compute_teacher(finished_episodes_only)
         for i, seq in enumerate(self.last_episode):
+            if not seq:
+                continue
+            if (finished_episodes_only
+                    and (seq[-1]['nonterminal']
+                         + seq[-1]['uninterrupted']) == 2.):
+                continue
             assert isinstance(seq, list)
             assert seq
+            old_memory_size = len(self.memory)
             self.memory.extend(seq)
+            self.n_episodes_in_memory += 1
             self.last_episode[i] = []
+            self.logger.debug('memory extend: %s + %s = %s n_episodes_in_memory: %s', old_memory_size, len(seq), len(self.memory), self.n_episodes_in_memory)
 
-    def _batch_compute_teacher(self):
+    def _batch_compute_teacher(self, finished_episodes_only=False):
         """Estimate state values and advantages of self.last_episode
 
         TD(lambda) estimation
         """
         for seq in self.last_episode:
+            if not seq:
+                continue
+            if (finished_episodes_only
+                    and (seq[-1]['nonterminal']
+                         + seq[-1]['uninterrupted']) == 2.):
+                continue
             adv = 0.0
             for transition in reversed(seq):
                 reward = transition['reward']
