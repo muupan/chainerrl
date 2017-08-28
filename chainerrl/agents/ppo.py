@@ -8,6 +8,7 @@ import copy
 import numpy as np
 
 
+import chainerrl
 from chainerrl import agent
 from chainerrl.misc.batch_states import batch_states
 
@@ -92,12 +93,12 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.normalize_advantage = normalize_advantage
         self.logger = logger
 
-        self.average_v = 0
-        self.average_v_decay = average_v_decay
-        self.average_loss_policy = 0
-        self.average_loss_value_func = 0
-        self.average_loss_entropy = 0
-        self.average_loss_decay = average_loss_decay
+        # self.average_v = 0
+        # self.average_v_decay = average_v_decay
+        # self.average_loss_policy = 0
+        # self.average_loss_value_func = 0
+        # self.average_loss_entropy = 0
+        # self.average_loss_decay = average_loss_decay
 
         self.xp = self.model.xp
         self.target_model = None
@@ -106,6 +107,16 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.memory = []
         self.last_episode = []
         self.n_episodes_in_memory = 0
+
+        self.recorder = chainerrl.statistics_recorder.StatisticsRecorder()
+        self.recorder.register('value', maxlen=1000)
+        self.recorder.register('vf_loss', maxlen=1000)
+        self.recorder.register('policy_loss', maxlen=1000)
+        self.recorder.register('policy_entropy', maxlen=1000)
+        self.recorder.register('policy_kl', maxlen=1000)
+        self.recorder.register('prob_ratio', maxlen=1000)
+        self.recorder.register('value_change', maxlen=1000)
+        self.recorder.register('explained_variance', maxlen=100)
 
     def _act(self, state, train):
         xp = self.xp
@@ -162,8 +173,11 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
 
         prob_ratio = F.expand_dims(prob_ratio, axis=-1)
         loss_policy = - F.mean(F.minimum(
-            prob_ratio * advs,
-            F.clip(prob_ratio, 1-self.clip_eps, 1+self.clip_eps) * advs))
+            prob_ratio * (advs + vs_pred_old - vs_pred.data),
+            F.clip(prob_ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advs))
+        self.recorder.record('prob_ratio', prob_ratio.data)
+        kl = target_distribs.kl(distribs)
+        self.recorder.record('policy_kl', kl.data)
 
         if self.clip_eps_vf is None:
             loss_value_func = F.mean_squared_error(vs_pred, vs_teacher)
@@ -174,20 +188,15 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                                  vs_pred_old - self.clip_eps_vf,
                                  vs_pred_old + self.clip_eps_vf)
                          - vs_teacher)
-                ))
+            ))
+        self.recorder.record('value_change', vs_pred.data - vs_pred_old)
 
         loss_entropy = -F.mean(ent)
 
         # Update stats
-        self.average_loss_policy += (
-            (1 - self.average_loss_decay) *
-            (float(loss_policy.data) - self.average_loss_policy))
-        self.average_loss_value_func += (
-            (1 - self.average_loss_decay) *
-            (float(loss_value_func.data) - self.average_loss_value_func))
-        self.average_loss_entropy += (
-            (1 - self.average_loss_decay) *
-            (float(loss_entropy.data) - self.average_loss_entropy))
+        self.recorder.record('policy_loss', float(loss_policy.data))
+        self.recorder.record('vf_loss', float(loss_value_func.data))
+        self.recorder.record('policy_entropy', -float(loss_entropy.data))
 
         return (
             loss_policy
@@ -202,6 +211,12 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         target_model = copy.deepcopy(self.model)
         dataset_iter = chainer.iterators.SerialIterator(
             self.memory, self.minibatch_size)
+
+        # Compute explained variance
+        if len(self.memory) > 0:
+            adv_var = np.var([b['adv'] for b in self.memory])
+            ret_var = np.var([b['v_teacher'] for b in self.memory])
+            self.recorder.record('explained_variance', 1 - adv_var / ret_var)
 
         if self.normalize_advantage:
             advs = np.asarray([float(b['adv']) for b in self.memory])
@@ -230,15 +245,13 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 advs=xp.array([b['adv'] for b in batch], dtype=xp.float32),
                 vs_teacher=xp.array(
                     [b['v_teacher'] for b in batch], dtype=xp.float32),
-                )
+            )
 
     def act_and_train(self, state, reward):
         action, v = self._act(state, train=False)
 
         # Update stats
-        self.average_v += (
-            (1 - self.average_v_decay) *
-            (float(v) - self.average_v))
+        self.recorder.record('value', float(v))
 
         if self.last_state is not None:
             self.last_episode.append({
@@ -259,10 +272,11 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
     def act(self, state):
         action, v = self._act(state, train=False)
 
+        self.recorder.record('value', float(v))
         # Update stats
-        self.average_v += (
-            (1 - self.average_v_decay) *
-            (float(v) - self.average_v))
+        # self.average_v += (
+        #     (1 - self.average_v_decay) *
+        #     (float(v) - self.average_v))
 
         return action
 
@@ -291,12 +305,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         pass
 
     def get_statistics(self):
-        return [
-            ('average_v', self.average_v),
-            ('average_loss_policy', self.average_loss_policy),
-            ('average_loss_value_func', self.average_loss_value_func),
-            ('average_loss_entropy', self.average_loss_entropy),
-        ]
+        return self.recorder.get_statistics()
 
 
 class ParallelPPO(PPO):
@@ -379,7 +388,8 @@ class ParallelPPO(PPO):
             self.memory.extend(seq)
             self.n_episodes_in_memory += 1
             self.last_episode[i] = []
-            self.logger.debug('memory extend: %s + %s = %s n_episodes_in_memory: %s', old_memory_size, len(seq), len(self.memory), self.n_episodes_in_memory)
+            self.logger.debug('memory extend: %s + %s = %s n_episodes_in_memory: %s',
+                              old_memory_size, len(seq), len(self.memory), self.n_episodes_in_memory)
 
     def _batch_compute_teacher(self, finished_episodes_only=False):
         """Estimate state values and advantages of self.last_episode
