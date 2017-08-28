@@ -214,8 +214,8 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
 
         # Compute explained variance
         if len(self.memory) > 0:
-            adv_var = np.var([b['adv'] for b in self.memory])
-            ret_var = np.var([b['v_teacher'] for b in self.memory])
+            adv_var = np.var([float(b['adv']) for b in self.memory])
+            ret_var = np.var([float(b['v_teacher']) for b in self.memory])
             self.recorder.record('explained_variance', 1 - adv_var / ret_var)
 
         if self.normalize_advantage:
