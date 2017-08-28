@@ -330,10 +330,11 @@ class ParallelPPO(PPO):
             action_distrib, v = self.model(b_state)
             actions = cuda.to_cpu(action_distrib.sample().data)
             v = cuda.to_cpu(v.data)
+        self.recorder.record('value', v)
         # Update stats
-        self.average_v += (
-            (1 - self.average_v_decay) *
-            (float(v.mean()) - self.average_v))
+        # self.average_v += (
+        #     (1 - self.average_v_decay) *
+        #     (float(v.mean()) - self.average_v))
         # Put experiences into the buffer
         for i in range(len(states)):
             if self.last_state[i] is not None:
