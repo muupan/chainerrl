@@ -173,7 +173,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
 
         prob_ratio = F.expand_dims(prob_ratio, axis=-1)
         loss_policy = - F.mean(F.minimum(
-            prob_ratio * (advs + vs_pred_old - vs_pred.data),
+            prob_ratio * advs,
             F.clip(prob_ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advs))
         self.recorder.record('prob_ratio', prob_ratio.data)
         kl = target_distribs.kl(distribs)
