@@ -12,6 +12,8 @@ import chainerrl
 from chainerrl import agent
 from chainerrl.misc.batch_states import batch_states
 
+from chainerrl.misc.weighted_std import weighted_std
+
 
 def _F_clip(x, x_min, x_max):
     """Elementwise clipping
@@ -167,12 +169,20 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
     def _lossfun(self,
                  distribs, vs_pred, log_probs,
                  target_distribs, vs_pred_old, target_log_probs,
-                 advs, vs_teacher):
+                 advs, vs_teacher, weights):
         prob_ratio = F.exp(log_probs - target_log_probs)
         ent = distribs.entropy
 
+        def weighted_mean(xs):
+            # Divide by N, not the sum of weights
+            if xs.shape != weights.shape:
+                w = F.broadcast_to(weights[..., None], xs.shape)
+            else:
+                w = weights
+            return F.mean(xs * w)
+
         prob_ratio = F.expand_dims(prob_ratio, axis=-1)
-        loss_policy = - F.mean(F.minimum(
+        loss_policy = - weighted_mean(F.minimum(
             prob_ratio * advs,
             F.clip(prob_ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advs))
         self.recorder.record('prob_ratio', prob_ratio.data)
@@ -180,18 +190,19 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.recorder.record('policy_kl', kl.data)
 
         if self.clip_eps_vf is None:
-            loss_value_func = F.mean_squared_error(vs_pred, vs_teacher)
+            loss_value_func = weighted_mean(
+                F.squared_error(vs_pred, vs_teacher))
         else:
-            loss_value_func = F.mean(F.maximum(
+            loss_value_func = weighted_mean(F.maximum(
                 F.square(vs_pred - vs_teacher),
                 F.square(_F_clip(vs_pred,
                                  vs_pred_old - self.clip_eps_vf,
                                  vs_pred_old + self.clip_eps_vf)
-                         - vs_teacher)
-            ))
+                         - vs_teacher))
+            )
         self.recorder.record('value_change', vs_pred.data - vs_pred_old)
 
-        loss_entropy = -F.mean(ent)
+        loss_entropy = -weighted_mean(ent)
 
         # Update stats
         self.recorder.record('policy_loss', float(loss_policy.data))
@@ -220,8 +231,9 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
 
         if self.normalize_advantage:
             advs = np.asarray([float(b['adv']) for b in self.memory])
-            mean = np.mean(advs)
-            std = np.std(advs)
+            weights = np.asarray([float(b['weight']) for b in self.memory])
+            mean = np.average(advs, weights=weights)
+            std = weighted_std(advs, weights=weights)
             self.logger.debug(
                 'advantage normlization mean: %s std: %s', mean, std)
             for b in self.memory:
@@ -232,6 +244,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             batch = dataset_iter.__next__()
             states = batch_states([b['state'] for b in batch], xp, self.phi)
             actions = xp.array([b['action'] for b in batch])
+            weights = xp.array([b['weight'] for b in batch], dtype=np.float32)
             distribs, vs_pred = self.model(states)
             with chainer.no_backprop_mode():
                 target_distribs, _ = target_model(states)
@@ -245,15 +258,16 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 advs=xp.array([b['adv'] for b in batch], dtype=xp.float32),
                 vs_teacher=xp.array(
                     [b['v_teacher'] for b in batch], dtype=xp.float32),
+                weights=weights,
             )
 
-    def act_and_train(self, state, reward):
+    def act_and_train(self, state, reward, weight=1.0):
         action, v = self._act(state, train=False)
 
         # Update stats
         self.recorder.record('value', float(v))
 
-        if self.last_state is not None:
+        if self.last_state is not None and weight > 0:
             self.last_episode.append({
                 'state': self.last_state,
                 'action': self.last_action,
@@ -261,7 +275,9 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 'v_pred': self.last_v,
                 'next_state': state,
                 'next_v_pred': v,
-                'nonterminal': 1.0})
+                'nonterminal': 1.0,
+                'weight': weight,
+            })
         self.last_state = state
         self.last_action = action
         self.last_v = v
@@ -280,18 +296,21 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
 
         return action
 
-    def stop_episode_and_train(self, state, reward, done=False):
+    def stop_episode_and_train(self, state, reward, done=False, weight=1.0):
         _, v = self._act(state, train=False)
 
         assert self.last_state is not None
-        self.last_episode.append({
-            'state': self.last_state,
-            'action': self.last_action,
-            'reward': reward,
-            'v_pred': self.last_v,
-            'next_state': state,
-            'next_v_pred': v,
-            'nonterminal': 0.0 if done else 1.0})
+        if weight > 0:
+            self.last_episode.append({
+                'state': self.last_state,
+                'action': self.last_action,
+                'reward': reward,
+                'v_pred': self.last_v,
+                'next_state': state,
+                'next_v_pred': v,
+                'nonterminal': 0.0 if done else 1.0,
+                'weight': weight,
+            })
 
         self.last_state = None
         del self.last_action
@@ -310,7 +329,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
 
 class ParallelPPO(PPO):
 
-    def batch_act_and_train(self, states, rewards, dones, interrupts):
+    def batch_act_and_train(self, states, rewards, dones, interrupts, weights):
         n_actors = len(states)
         assert len(rewards) == n_actors
         assert len(dones) == n_actors
@@ -338,16 +357,18 @@ class ParallelPPO(PPO):
         # Put experiences into the buffer
         for i in range(len(states)):
             if self.last_state[i] is not None:
-                self.last_episode[i].append({
-                    'state': self.last_state[i],
-                    'action': self.last_action[i],
-                    'reward': rewards[i],
-                    'v_pred': self.last_v[i],
-                    'next_state': states[i],
-                    'next_v_pred': v[i],
-                    'nonterminal': 0. if dones[i] else 1.,
-                    'uninterrupted': 0. if interrupts[i] else 1.,
-                })
+                if weights[i] > 0:
+                    self.last_episode[i].append({
+                        'state': self.last_state[i],
+                        'action': self.last_action[i],
+                        'reward': rewards[i],
+                        'v_pred': self.last_v[i],
+                        'next_state': states[i],
+                        'next_v_pred': v[i],
+                        'nonterminal': 0. if dones[i] else 1.,
+                        'uninterrupted': 0. if interrupts[i] else 1.,
+                        'weight': weights[i],
+                    })
             if dones[i] or interrupts[i]:
                 self.last_state[i] = None
                 self.last_action[i] = None
