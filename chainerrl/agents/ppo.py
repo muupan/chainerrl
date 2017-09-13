@@ -69,6 +69,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                  clip_eps=0.2,
                  clip_eps_vf=0.2,
                  normalize_advantage=True,
+                 act_deterministically=False,
                  average_v_decay=0.999, average_loss_decay=0.99,
                  logger=logging.getLogger(__name__),
                  ):
@@ -105,6 +106,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.xp = self.model.xp
         self.target_model = None
         self.last_state = None
+        self.act_deterministically = act_deterministically
 
         self.memory = []
         self.last_episode = []
@@ -119,13 +121,18 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.recorder.register('prob_ratio', maxlen=1000)
         self.recorder.register('value_change', maxlen=1000)
         self.recorder.register('explained_variance', maxlen=100)
+        self.recorder.register('raw_advantage', maxlen=1000)
+        self.recorder.register('normalized_advantage', maxlen=1000)
 
-    def _act(self, state, train):
+    def _act(self, state, train, deterministic):
         xp = self.xp
         with chainer.using_config('train', train), chainer.no_backprop_mode():
             b_state = batch_states([state], xp, self.phi)
             action_distrib, v = self.model(b_state)
-            action = action_distrib.sample()
+            if deterministic:
+                action = action_distrib.most_probable
+            else:
+                action = action_distrib.sample()
             self.logger.debug('act action: %s distrib: %s v: %s',
                               action.data[0], action_distrib, float(v.data[0]))
             return cuda.to_cpu(action.data)[0], v.data[0]
@@ -262,7 +269,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             )
 
     def act_and_train(self, state, reward, weight=1.0):
-        action, v = self._act(state, train=False)
+        action, v = self._act(state, train=False, deterministic=False)
 
         # Update stats
         self.recorder.record('value', float(v))
@@ -286,7 +293,8 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         return action
 
     def act(self, state):
-        action, v = self._act(state, train=False)
+        action, v = self._act(state, train=False,
+                              deterministic=self.act_deterministically)
 
         self.recorder.record('value', float(v))
         # Update stats
@@ -297,7 +305,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         return action
 
     def stop_episode_and_train(self, state, reward, done=False, weight=1.0):
-        _, v = self._act(state, train=False)
+        _, v = self._act(state, train=False, deterministic=False)
 
         assert self.last_state is not None
         if weight > 0:
