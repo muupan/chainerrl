@@ -153,7 +153,8 @@ class FCGaussianPolicyWithStateIndependentCovariance(
                  var_type='spherical',
                  nonlinearity=F.relu,
                  mean_wscale=1,
-                 var_func=F.softplus):
+                 var_func=F.softplus,
+                 var_init=0.0):
 
         self.n_input_channels = n_input_channels
         self.action_size = action_size
@@ -184,7 +185,7 @@ class FCGaussianPolicyWithStateIndependentCovariance(
         with self.init_scope():
             self.hidden_layers = links.Sequence(*layers)
             self.var_param = chainer.Parameter(
-                initializer=0.0, shape=(var_size,))
+                initializer=var_init, shape=(var_size,))
 
     def __call__(self, x):
         mean = self.hidden_layers(x)
