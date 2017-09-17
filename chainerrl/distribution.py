@@ -272,6 +272,10 @@ class GaussianDistribution(Distribution):
     def most_probable(self):
         return self.mean
 
+    @cached_property
+    def mean(self):
+        return self.mean
+
     def sample(self):
         return F.gaussian(self.mean, self.ln_var)
 
@@ -427,6 +431,10 @@ class BetaDistribution(Distribution):
     def most_probable(self):
         return (self.alpha - 1) / (self.alpha + self.beta - 2)
 
+    @cached_property
+    def mean(self):
+        return self.alpha / (self.alpha + self.beta)
+
     def sample(self):
         # TODO(muupan) use gpu
         xp = chainer.cuda.get_array_module(self.alpha)
@@ -505,6 +513,10 @@ class AffineTransformedDistribution(Distribution):
     @cached_property
     def most_probable(self):
         return self._transform(self.distrib.most_probable)
+
+    @cached_property
+    def mean(self):
+        return self._transform(self.distrib.mean)
 
     def sample(self):
         return self._transform(self.distrib.sample())

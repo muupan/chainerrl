@@ -397,6 +397,12 @@ class TestBetaDistribution(unittest.TestCase):
         self.assertTrue(isinstance(most_probable, chainer.Variable))
         self.assertEqual(most_probable.shape, (self.batch_size, self.ndim))
 
+    def test_mean(self):
+        gt_distrib = scipy.stats.beta(self.alpha, self.beta)
+        np.testing.assert_allclose(
+            self.distrib.mean.data,
+            gt_distrib.mean(), rtol=1e-5)
+
     def test_prob(self):
         sample = self.distrib.sample()
         sample_prob = self.distrib.prob(sample)
@@ -482,6 +488,11 @@ class TestAffineTransformedDistribution(unittest.TestCase):
         np.testing.assert_allclose(
             most_probable.data, np.zeros((self.batch_size, self.ndim)),
             rtol=1e-5, atol=1e-5)
+
+    def test_mean(self):
+        np.testing.assert_allclose(
+            self.distrib.mean.data,
+            np.zeros((self.batch_size, self.ndim)), rtol=1e-5, atol=1e-5)
 
     def test_prob(self):
         sample = self.distrib.sample()
