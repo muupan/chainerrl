@@ -130,7 +130,10 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             b_state = batch_states([state], xp, self.phi)
             action_distrib, v = self.model(b_state)
             if deterministic:
-                action = action_distrib.most_probable
+                if hasattr(action_distrib, 'mean'):
+                    action = action_distrib.mean
+                else:
+                    action = action_distrib.most_probable
             else:
                 action = action_distrib.sample()
             self.logger.debug('act action: %s distrib: %s v: %s',
