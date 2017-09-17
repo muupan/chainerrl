@@ -16,7 +16,9 @@ from chainer import functions as F
 from future.utils import with_metaclass
 import numpy as np
 
+from chainerrl.functions import log_gamma
 from chainerrl.functions import mellowmax
+from chainerrl.functions import polygamma
 
 
 def _wrap_by_variable(x):
@@ -348,3 +350,198 @@ class ContinuousDeterministicDistribution(Distribution):
     @property
     def params(self):
         return (self.x,)
+
+
+class LaplaceDistribution(Distribution):
+    """Laplace distribution."""
+
+    def __init__(self, mean, var):
+        self.mean = _wrap_by_variable(mean)
+        self.var = _wrap_by_variable(var)
+        self.b = (self.var / 2) ** 0.5
+
+    @property
+    def params(self):
+        return (self.mean, self.var)
+
+    @cached_property
+    def most_probable(self):
+        return self.mean
+
+    def sample(self):
+        xp = chainer.cuda.get_array_module(self.mean)
+        eps = xp.random.uniform(size=self.mean.shape) - 0.5
+        std_laplace = xp.sign(eps) * xp.log(1 - 2 * abs(eps))
+        return self.mean + self.b * std_laplace
+
+    def prob(self, x):
+        return F.exp(self.log_prob(x))
+
+    def log_prob(self, x):
+        elemwise_log_probs = (-abs(x - self.mean) / self.b
+                              - F.log(2 * self.b))
+        return F.sum(elemwise_log_probs, axis=1)
+
+    @cached_property
+    def entropy(self):
+        return F.sum(F.log(2 * self.b * np.e), axis=1)
+
+    def copy(self):
+        return LaplaceDistribution(_unwrap_variable(self.mean).copy(),
+                                   _unwrap_variable(self.var).copy())
+
+    def kl(self, q):
+        # TODO(muupan) implement
+        return F.sum(self.mean, axis=1)
+
+    def __repr__(self):
+        return 'LaplaceDistribution mean:{} var:{} entropy:{}'.format(
+            self.mean.data, self.var.data, self.entropy.data)
+
+    def __getitem__(self, i):
+        return LaplaceDistribution(self.mean[i], self.var[i])
+
+
+def _log_beta(alpha, beta):
+    return log_gamma(alpha) + log_gamma(beta) - log_gamma(alpha + beta)
+
+
+def _digamma(x):
+    return polygamma(0, x)
+
+
+class BetaDistribution(Distribution):
+    """Beta distribution."""
+
+    def __init__(self, alpha, beta):
+        self.alpha = _wrap_by_variable(alpha)
+        self.beta = _wrap_by_variable(beta)
+        self.log_B = _log_beta(alpha, beta)
+        self.xp = chainer.cuda.get_array_module(alpha)
+
+    @property
+    def params(self):
+        return (self.alpha, self.beta)
+
+    @cached_property
+    def most_probable(self):
+        return (self.alpha - 1) / (self.alpha + self.beta - 2)
+
+    def sample(self):
+        # TODO(muupan) use gpu
+        xp = chainer.cuda.get_array_module(self.alpha)
+        sample_cpu = np.random.beta(chainer.cuda.to_cpu(self.alpha.data),
+                                    chainer.cuda.to_cpu(self.beta.data))
+        return chainer.Variable(xp.asarray(sample_cpu, dtype=np.float32))
+
+    def prob(self, x):
+        return F.exp(self.log_prob(x))
+
+    def log_prob(self, x):
+        elemwise_log_probs = ((self.alpha - 1) * F.log(x)
+                              + (self.beta - 1) * F.log(1 - x)
+                              - self.log_B)
+        return F.sum(elemwise_log_probs, axis=1)
+
+    @cached_property
+    def entropy(self):
+        elemwise_entropy = (
+            self.log_B
+            - (self.alpha - 1) * _digamma(self.alpha)
+            - (self.beta - 1) * _digamma(self.beta)
+            + (self.alpha + self.beta - 2) * _digamma(self.alpha + self.beta))
+        return F.sum(elemwise_entropy, axis=1)
+
+    def copy(self):
+        return BetaDistribution(_unwrap_variable(self.alpha).copy(),
+                                _unwrap_variable(self.beta).copy())
+
+    def kl(self, q):
+        elemwise_kl = (
+            q.log_B - self.log_B
+            + (self.alpha - q.alpha) * _digamma(self.alpha)
+            + (self.beta - q.beta) * _digamma(self.beta)
+            + ((self.alpha - q.alpha + self.beta - q.beta)
+                * _digamma(self.alpha + self.beta)))
+        return F.sum(elemwise_kl, axis=1)
+
+    def __repr__(self):
+        return 'BetaDistribution alpha:{} beta:{} entropy:{} mode:{}'.format(
+            self.alpha.data,
+            self.beta.data,
+            self.entropy.data,
+            self.most_probable.data)
+
+    def __getitem__(self, i):
+        return BetaDistribution(self.alpha[i], self.beta[i])
+
+
+class AffineTransformedDistribution(Distribution):
+
+    def __init__(self, distrib, scale, shift):
+        self.distrib = distrib
+        assert not isinstance(scale, chainer.Variable)
+        assert not isinstance(shift, chainer.Variable)
+        self.scale = scale
+        self.shift = shift
+        self.xp = chainer.cuda.get_array_module(scale)
+
+    def _transform(self, x):
+        xp = self.xp
+        scale = xp.broadcast_to(self.scale, x.shape)
+        shift = xp.broadcast_to(self.shift, x.shape)
+        return x * scale + shift
+
+    def _inverse_transform(self, y):
+        xp = self.xp
+        scale = xp.broadcast_to(self.scale, y.shape)
+        shift = xp.broadcast_to(self.shift, y.shape)
+        return (y - shift) / scale
+
+    @property
+    def params(self):
+        return self.distrib.params
+
+    @cached_property
+    def most_probable(self):
+        return self._transform(self.distrib.most_probable)
+
+    def sample(self):
+        return self._transform(self.distrib.sample())
+
+    def prob(self, x):
+        return F.exp(self.log_prob(x))
+
+    def log_prob(self, x):
+        xp = chainer.cuda.get_array_module(self.scale)
+        return (self.distrib.log_prob(self._inverse_transform(x))
+                - xp.sum(xp.log(self.scale), axis=1))
+
+    @cached_property
+    def entropy(self):
+        xp = chainer.cuda.get_array_module(self.scale)
+        return self.distrib.entropy + xp.sum(xp.log(abs(self.scale)), axis=1)
+
+    def copy(self):
+        return AffineTransformedDistribution(
+            distrib=self.distrib.copy(),
+            scale=self.scale,
+            shift=self.shift)
+
+    def kl(self, q):
+        assert isinstance(q, AffineTransformedDistribution)
+        assert isinstance(q.distrib, type(self.distrib))
+        self.xp.testing.assert_allclose(q.scale, self.scale)
+        self.xp.testing.assert_allclose(q.shift, self.shift)
+        base_kl = self.distrib.kl(q.distrib)
+        # FIXME(muupan) This is correct only when scale is scalar or all of
+        # its elemens are the same. To be pricise, kl must be divided
+        # elementwise by scale.
+        return base_kl / self.scale.mean()
+
+    def __repr__(self):
+        return 'AffineTransformedDistribution distrib:({}) scale:{} shift:{}'.format(  # NOQA
+            self.distrib, self.scale, self.shift)
+
+    def __getitem__(self, i):
+        return BetaDistribution(self.distrib[i], self.scale[i], self.shift[i])

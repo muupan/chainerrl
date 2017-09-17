@@ -293,3 +293,241 @@ class TestContinuousDeterministicDistribution(unittest.TestCase):
         another = self.distrib.copy()
         self.assertIsNot(self.distrib, another)
         self.assertIsNot(self.distrib.x, another.x)
+
+
+@testing.parameterize(*testing.product({
+    'batch_size': [1, 3],
+    'ndim': [1, 2, 10],
+}))
+class TestLaplaceDistribution(unittest.TestCase):
+
+    def setUp(self):
+        self.mean = np.random.rand(
+            self.batch_size, self.ndim).astype(np.float32)
+        self.var = np.random.rand(
+            self.batch_size, self.ndim).astype(np.float32)
+        self.b = (self.var / 2) ** 0.5
+        self.distrib = distribution.LaplaceDistribution(self.mean, self.var)
+
+    def test_sample(self):
+        sample = self.distrib.sample()
+        self.assertTrue(isinstance(sample, chainer.Variable))
+        self.assertEqual(sample.shape, (self.batch_size, self.ndim))
+
+    def test_most_probable(self):
+        most_probable = self.distrib.most_probable
+        self.assertTrue(isinstance(most_probable, chainer.Variable))
+        self.assertEqual(most_probable.shape, (self.batch_size, self.ndim))
+        np.testing.assert_allclose(most_probable.data, self.mean, rtol=1e-5)
+
+    def test_prob(self):
+        sample = self.distrib.sample()
+        sample_prob = self.distrib.prob(sample)
+        for b in range(self.batch_size):
+            laplace = scipy.stats.laplace(self.mean[b], self.b[b])
+            desired_pdf = laplace.pdf(sample.data[b])
+            np.testing.assert_allclose(
+                sample_prob.data[b],
+                np.prod(desired_pdf), rtol=1e-5)
+
+    def test_log_prob(self):
+        sample = self.distrib.sample()
+        sample_log_prob = self.distrib.log_prob(sample)
+        for b in range(self.batch_size):
+            laplace = scipy.stats.laplace(self.mean[b], self.b[b])
+            desired_pdf = laplace.pdf(sample.data[b])
+            np.testing.assert_allclose(
+                sample_log_prob.data[b],
+                np.sum(np.log(desired_pdf)), rtol=1e-5)
+
+    def test_entropy(self):
+        entropy = self.distrib.entropy
+        for b in range(self.batch_size):
+            laplace = scipy.stats.laplace(self.mean[b], self.b[b])
+            desired_entropy = laplace.entropy()
+            np.testing.assert_allclose(
+                entropy.data[b], np.sum(desired_entropy), rtol=1e-5)
+
+    # def test_self_kl(self):
+    #     kl = self.distrib.kl(self.distrib)
+    #     for b in range(self.batch_size):
+    #         np.testing.assert_allclose(
+    #             kl.data[b], np.zeros_like(kl.data[b]), rtol=1e-5)
+    #
+    # def test_kl(self):
+    #     # Compare it to chainer.functions.gaussian_kl_divergence
+    #     standard = distribution.GaussianDistribution(
+    #         mean=np.zeros((self.batch_size, self.ndim), dtype=np.float32),
+    #         var=np.ones((self.batch_size, self.ndim), dtype=np.float32))
+    #     kl = self.distrib.kl(standard)
+    #     chainer_kl = chainer.functions.gaussian_kl_divergence(
+    #         self.distrib.mean, self.distrib.ln_var)
+    #     np.testing.assert_allclose(kl.data.sum(),
+    #                                chainer_kl.data,
+    #                                rtol=1e-5)
+
+    def test_copy(self):
+        another = self.distrib.copy()
+        self.assertIsNot(self.distrib, another)
+        self.assertIsNot(self.distrib.mean, another.mean)
+        self.assertIsNot(self.distrib.var, another.var)
+
+
+@testing.parameterize(*testing.product({
+    'batch_size': [1, 3],
+    'ndim': [1, 2, 10],
+    'affine_transform': [True, False],
+}))
+class TestBetaDistribution(unittest.TestCase):
+
+    def setUp(self):
+        self.alpha = np.random.uniform(
+            1, 10, (self.batch_size, self.ndim)).astype(np.float32)
+        self.beta = np.random.uniform(
+            1, 10, (self.batch_size, self.ndim)).astype(np.float32)
+        self.distrib = distribution.BetaDistribution(self.alpha, self.beta)
+
+    def test_sample(self):
+        sample = self.distrib.sample()
+        self.assertTrue(isinstance(sample, chainer.Variable))
+        self.assertEqual(sample.shape, (self.batch_size, self.ndim))
+
+    def test_most_probable(self):
+        most_probable = self.distrib.most_probable
+        self.assertTrue(isinstance(most_probable, chainer.Variable))
+        self.assertEqual(most_probable.shape, (self.batch_size, self.ndim))
+
+    def test_prob(self):
+        sample = self.distrib.sample()
+        sample_prob = self.distrib.prob(sample)
+        for b in range(self.batch_size):
+            gt_distrib = scipy.stats.beta(self.alpha[b], self.beta[b])
+            desired_pdf = gt_distrib.pdf(sample.data[b])
+            np.testing.assert_allclose(
+                sample_prob.data[b],
+                np.prod(desired_pdf), rtol=1e-5)
+
+    def test_log_prob(self):
+        sample = self.distrib.sample()
+        sample_log_prob = self.distrib.log_prob(sample)
+        for b in range(self.batch_size):
+            gt_distrib = scipy.stats.beta(self.alpha[b], self.beta[b])
+            desired_pdf = gt_distrib.pdf(sample.data[b])
+            np.testing.assert_allclose(
+                sample_log_prob.data[b],
+                np.sum(np.log(desired_pdf)), rtol=1e-5)
+
+    def test_entropy(self):
+        entropy = self.distrib.entropy
+        for b in range(self.batch_size):
+            gt_distrib = scipy.stats.beta(self.alpha[b], self.beta[b])
+            desired_entropy = gt_distrib.entropy()
+            np.testing.assert_allclose(
+                entropy.data[b], np.sum(desired_entropy), rtol=1e-5)
+
+    # def test_self_kl(self):
+    #     kl = self.distrib.kl(self.distrib)
+    #     for b in range(self.batch_size):
+    #         np.testing.assert_allclose(
+    #             kl.data[b], np.zeros_like(kl.data[b]), rtol=1e-5)
+    #
+    # def test_kl(self):
+    #     # Compare it to chainer.functions.gaussian_kl_divergence
+    #     standard = distribution.GaussianDistribution(
+    #         mean=np.zeros((self.batch_size, self.ndim), dtype=np.float32),
+    #         var=np.ones((self.batch_size, self.ndim), dtype=np.float32))
+    #     kl = self.distrib.kl(standard)
+    #     chainer_kl = chainer.functions.gaussian_kl_divergence(
+    #         self.distrib.mean, self.distrib.ln_var)
+    #     np.testing.assert_allclose(kl.data.sum(),
+    #                                chainer_kl.data,
+    #                                rtol=1e-5)
+
+    def test_copy(self):
+        another = self.distrib.copy()
+        self.assertIsNot(self.distrib, another)
+        self.assertIsNot(self.distrib.alpha, another.alpha)
+        self.assertIsNot(self.distrib.beta, another.beta)
+
+
+@testing.parameterize(*testing.product({
+    'batch_size': [1, 3],
+    'ndim': [1, 2, 10],
+}))
+class TestAffineTransformedDistribution(unittest.TestCase):
+
+    def setUp(self):
+        # Random gaussian policy
+        self.base_mean = np.random.rand(
+            self.batch_size, self.ndim).astype(np.float32)
+        self.base_var = np.random.rand(
+            self.batch_size, self.ndim).astype(np.float32)
+        self.base_distrib = distribution.GaussianDistribution(
+            self.base_mean, self.base_var)
+        # Affine-transform it so that it should be N(0,1)
+        self.distrib = distribution.AffineTransformedDistribution(
+            self.base_distrib,
+            scale=1. / self.base_var ** 0.5,
+            shift=-self.base_mean * 1. / self.base_var ** 0.5)
+
+    def test_sample(self):
+        sample = self.distrib.sample()
+        self.assertTrue(isinstance(sample, chainer.Variable))
+        self.assertEqual(sample.shape, (self.batch_size, self.ndim))
+
+    def test_most_probable(self):
+        most_probable = self.distrib.most_probable
+        self.assertTrue(isinstance(most_probable, chainer.Variable))
+        self.assertEqual(most_probable.shape, (self.batch_size, self.ndim))
+        np.testing.assert_allclose(
+            most_probable.data, np.zeros((self.batch_size, self.ndim)),
+            rtol=1e-5, atol=1e-5)
+
+    def test_prob(self):
+        sample = self.distrib.sample()
+        sample_prob = self.distrib.prob(sample)
+        for b in range(self.batch_size):
+            cov = np.identity(self.ndim, dtype=np.float32)
+            gt_distrib = scipy.stats.multivariate_normal(
+                np.zeros(self.ndim), cov)
+            desired_pdf = gt_distrib.pdf(sample.data[b])
+            np.testing.assert_allclose(
+                sample_prob.data[b],
+                desired_pdf, rtol=1e-5)
+
+    def test_log_prob(self):
+        sample = self.distrib.sample()
+        sample_log_prob = self.distrib.log_prob(sample)
+        for b in range(self.batch_size):
+            cov = np.identity(self.ndim, dtype=np.float32)
+            gt_distrib = scipy.stats.multivariate_normal(
+                np.zeros(self.ndim), cov)
+            desired_pdf = gt_distrib.pdf(sample.data[b])
+            np.testing.assert_allclose(
+                sample_log_prob.data[b],
+                np.log(desired_pdf), rtol=1e-4)
+
+    def test_entropy(self):
+        entropy = self.distrib.entropy
+        base_entropy = self.distrib.distrib.entropy
+        for b in range(self.batch_size):
+            cov = np.identity(self.ndim, dtype=np.float32)
+            gt_distrib = scipy.stats.multivariate_normal(
+                np.zeros(self.ndim), cov)
+            desired_entropy = gt_distrib.entropy()
+            np.testing.assert_allclose(
+                entropy.data[b], desired_entropy, rtol=1e-5)
+
+    def test_self_kl(self):
+        kl = self.distrib.kl(self.distrib)
+        for b in range(self.batch_size):
+            np.testing.assert_allclose(
+                kl.data[b], np.zeros_like(kl.data[b]), rtol=1e-5)
+
+    def test_copy(self):
+        another = self.distrib.copy()
+        self.assertIsNot(self.distrib, another)
+        xp = self.distrib.xp
+        xp.testing.assert_allclose(self.distrib.scale, another.scale)
+        xp.testing.assert_allclose(self.distrib.shift, another.shift)
+        self.assertIsNot(self.distrib.distrib, another.distrib)
