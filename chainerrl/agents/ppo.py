@@ -14,6 +14,8 @@ from chainerrl.misc.batch_states import batch_states
 
 from chainerrl.misc.weighted_std import weighted_std
 
+from chainerrl.recurrent import state_reset
+
 
 def _F_clip(x, x_min, x_max):
     """Elementwise clipping
@@ -71,6 +73,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                  normalize_advantage=True,
                  act_deterministically=False,
                  average_v_decay=0.999, average_loss_decay=0.99,
+                 recurrent=False,
                  logger=logging.getLogger(__name__),
                  ):
         self.model = model
@@ -94,6 +97,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.clip_eps = clip_eps
         self.clip_eps_vf = clip_eps_vf
         self.normalize_advantage = normalize_advantage
+        self.recurrent = recurrent
         self.logger = logger
 
         # self.average_v = 0
@@ -104,11 +108,11 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         # self.average_loss_decay = average_loss_decay
 
         self.xp = self.model.xp
-        self.target_model = None
         self.last_state = None
         self.act_deterministically = act_deterministically
 
         self.memory = []
+        self.episodic_memory = []
         self.last_episode = []
         self.n_episodes_in_memory = 0
 
@@ -149,12 +153,15 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             self._flush_last_episode()
             self.update()
             self.memory = []
+            self.episodic_memory = []
             self.n_episodes_in_memory = 0
 
     def _flush_last_episode(self):
         if self.last_episode:
             self._compute_teacher()
             self.memory.extend(self.last_episode)
+            if self.recurrent:
+                self.episodic_memory.append(self.last_episode)
             self.last_episode = []
             self.n_episodes_in_memory += 1
 
@@ -225,19 +232,64 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             + self.entropy_coeff * loss_entropy
         )
 
+    def update_from_episodes(self, episodes, target_model):
+        xp = self.xp
+        with state_reset(self.model), state_reset(target_model):
+            loss = 0
+            tmp = list(reversed(sorted(
+                enumerate(episodes), key=lambda x: len(x[1]))))
+            # Desc by lengths of episodes
+            sorted_episodes = [elem[1] for elem in tmp]
+            indices = [elem[0] for elem in tmp]  # argsort
+            max_epi_len = len(sorted_episodes[0])
+            for i in range(max_epi_len):
+                batch = []
+                for ep, index in zip(sorted_episodes, indices):
+                    if len(ep) <= i:
+                        break
+                    batch.append(ep[i])
+                # Now batch contains transitions at timestep i
+                states = batch_states([b['state']
+                                       for b in batch], xp, self.phi)
+                actions = xp.array([b['action'] for b in batch])
+                weights = xp.array([b['weight']
+                                    for b in batch], dtype=np.float32)
+                distribs, vs_pred = self.model(states)
+                with chainer.no_backprop_mode():
+                    target_distribs, _ = target_model(states)
+                loss += self._lossfun(
+                    distribs, vs_pred, distribs.log_prob(actions),
+                    target_distribs=target_distribs,
+                    vs_pred_old=xp.array(
+                        [b['v_pred'] for b in batch], dtype=xp.float32),
+                    target_log_probs=target_distribs.log_prob(actions),
+                    advs=xp.array([b['adv'] for b in batch], dtype=xp.float32),
+                    vs_teacher=xp.array(
+                        [b['v_teacher'] for b in batch], dtype=xp.float32),
+                    weights=weights,
+                )
+            loss /= max_epi_len
+
+            self.model.cleargrads()
+            loss.backward()
+            self.optimizer.update()
+
     def update(self):
-        self.logger.debug('update memory: %s', len(self.memory))
+        self.logger.debug('update memory: %s n_episodes: %s',
+                          len(self.memory),
+                          self.n_episodes_in_memory)
         assert self.memory
         xp = self.xp
         target_model = copy.deepcopy(self.model)
-        dataset_iter = chainer.iterators.SerialIterator(
-            self.memory, self.minibatch_size)
-
         # Compute explained variance
         if len(self.memory) > 0:
             adv_var = np.var([float(b['adv']) for b in self.memory])
             ret_var = np.var([float(b['v_teacher']) for b in self.memory])
             self.recorder.record('explained_variance', 1 - adv_var / ret_var)
+
+        self.recorder.record(
+            'raw_advantage',
+            np.asarray([float(b['adv']) for b in self.memory]))
 
         if self.normalize_advantage:
             advs = np.asarray([float(b['adv']) for b in self.memory])
@@ -249,27 +301,48 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             for b in self.memory:
                 b['adv'] = (b['adv'] - mean) / std
 
-        dataset_iter.reset()
-        while dataset_iter.epoch < self.epochs:
-            batch = dataset_iter.__next__()
-            states = batch_states([b['state'] for b in batch], xp, self.phi)
-            actions = xp.array([b['action'] for b in batch])
-            weights = xp.array([b['weight'] for b in batch], dtype=np.float32)
-            distribs, vs_pred = self.model(states)
-            with chainer.no_backprop_mode():
-                target_distribs, _ = target_model(states)
-            self.optimizer.update(
-                self._lossfun,
-                distribs, vs_pred, distribs.log_prob(actions),
-                target_distribs=target_distribs,
-                vs_pred_old=xp.array(
-                    [b['v_pred'] for b in batch], dtype=xp.float32),
-                target_log_probs=target_distribs.log_prob(actions),
-                advs=xp.array([b['adv'] for b in batch], dtype=xp.float32),
-                vs_teacher=xp.array(
-                    [b['v_teacher'] for b in batch], dtype=xp.float32),
-                weights=weights,
-            )
+            new_advs = np.asarray([float(b['adv']) for b in self.memory])
+            # np.testing.assert_allclose(np.mean(new_advs), 0, atol=1e-5)
+            # np.testing.assert_allclose(np.std(new_advs), 1, atol=1e-5)
+            self.recorder.record('normalized_advantage', new_advs)
+
+        if self.recurrent:
+            dataset_iter = chainer.iterators.SerialIterator(
+                self.episodic_memory, self.minibatch_size)
+            dataset_iter.reset()
+            it = 0
+            while dataset_iter.epoch < self.epochs:
+                self.logger.debug('update recurrent iter: %s epoch: %s',
+                                  it, dataset_iter.epoch)
+                batch_episodes = dataset_iter.__next__()
+                self.update_from_episodes(batch_episodes, target_model)
+                it += 1
+        else:
+            dataset_iter = chainer.iterators.SerialIterator(
+                self.memory, self.minibatch_size)
+            dataset_iter.reset()
+            while dataset_iter.epoch < self.epochs:
+                batch = dataset_iter.__next__()
+                states = batch_states([b['state']
+                                       for b in batch], xp, self.phi)
+                actions = xp.array([b['action'] for b in batch])
+                weights = xp.array([b['weight']
+                                    for b in batch], dtype=np.float32)
+                distribs, vs_pred = self.model(states)
+                with chainer.no_backprop_mode():
+                    target_distribs, _ = target_model(states)
+                self.optimizer.update(
+                    self._lossfun,
+                    distribs, vs_pred, distribs.log_prob(actions),
+                    target_distribs=target_distribs,
+                    vs_pred_old=xp.array(
+                        [b['v_pred'] for b in batch], dtype=xp.float32),
+                    target_log_probs=target_distribs.log_prob(actions),
+                    advs=xp.array([b['adv'] for b in batch], dtype=xp.float32),
+                    vs_teacher=xp.array(
+                        [b['v_teacher'] for b in batch], dtype=xp.float32),
+                    weights=weights,
+                )
 
     def act_and_train(self, state, reward, weight=1.0):
         action, v = self._act(state, train=False, deterministic=False)
@@ -300,11 +373,6 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                               deterministic=self.act_deterministically)
 
         self.recorder.record('value', float(v))
-        # Update stats
-        # self.average_v += (
-        #     (1 - self.average_v_decay) *
-        #     (float(v) - self.average_v))
-
         return action
 
     def stop_episode_and_train(self, state, reward, done=False, weight=1.0):
@@ -332,7 +400,8 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.stop_episode()
 
     def stop_episode(self):
-        pass
+        if self.recurrent:
+            self.model.reset_state()
 
     def get_statistics(self):
         return self.recorder.get_statistics()
@@ -345,6 +414,7 @@ class ParallelPPO(PPO):
         assert len(rewards) == n_actors
         assert len(dones) == n_actors
         assert len(interrupts) == n_actors
+        assert not self.recurrent, 'not yet implemented'
         # Initialization depending on the number of actors
         if self.last_state is None or len(self.last_state) < n_actors:
             if self.last_state is not None:
@@ -368,6 +438,7 @@ class ParallelPPO(PPO):
         # Put experiences into the buffer
         for i in range(len(states)):
             if self.last_state[i] is not None:
+                assert rewards[i] is not None
                 if weights[i] > 0:
                     self.last_episode[i].append({
                         'state': self.last_state[i],
@@ -439,15 +510,15 @@ class ParallelPPO(PPO):
             adv = 0.0
             for transition in reversed(seq):
                 reward = transition['reward']
-                if reward is None:
-                    # this must be an initial state
-                    reward = 0.
+                assert reward is not None
                 td_err = (
                     reward
                     + (self.gamma * transition['nonterminal']
                        * transition['next_v_pred'])
                     - transition['v_pred']
                 )
+                # Since seq may contain multiple episodes, you have to
+                # truncate GAE when interrupted or terminaal
                 adv = (td_err
                        + (transition['uninterrupted']
                            * transition['nonterminal']
