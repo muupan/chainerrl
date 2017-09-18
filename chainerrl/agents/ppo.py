@@ -307,8 +307,9 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             self.recorder.record('normalized_advantage', new_advs)
 
         if self.recurrent:
+            batch_size = min(self.n_episodes_in_memory, self.minibatch_size)
             dataset_iter = chainer.iterators.SerialIterator(
-                self.episodic_memory, self.minibatch_size)
+                self.episodic_memory, batch_size)
             dataset_iter.reset()
             it = 0
             while dataset_iter.epoch < self.epochs:
