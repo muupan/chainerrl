@@ -168,14 +168,20 @@ class FCGaussianPolicyWithStateIndependentCovariance(
         self.var_func = var_func
 
         layers = []
-        layers.append(L.Linear(n_input_channels, n_hidden_channels))
-        for _ in range(n_hidden_layers - 1):
+        if n_hidden_layers > 0:
+            layers.append(L.Linear(n_input_channels, n_hidden_channels))
             layers.append(self.nonlinearity)
-            layers.append(L.Linear(n_hidden_channels, n_hidden_channels))
-        # The last layer is used to compute the mean
-        layers.append(
-            L.Linear(n_hidden_channels, action_size,
-                     initialW=LeCunNormal(mean_wscale)))
+            for _ in range(n_hidden_layers - 1):
+                layers.append(L.Linear(n_hidden_channels, n_hidden_channels))
+                layers.append(self.nonlinearity)
+            # The last layer is used to compute the mean
+            layers.append(
+                L.Linear(n_hidden_channels, action_size,
+                         initialW=LeCunNormal(mean_wscale)))
+        else:
+            layers.append(
+                L.Linear(n_input_channels, action_size,
+                         initialW=LeCunNormal(mean_wscale)))
 
         if self.bound_mean:
             layers.append(lambda x: bound_by_tanh(
