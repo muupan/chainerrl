@@ -21,7 +21,7 @@ class ReplayBuffer(object):
         self.memory = deque(maxlen=capacity)
 
     def append(self, state, action, reward, next_state=None, next_action=None,
-               is_state_terminal=False):
+               is_state_terminal=False, **kwargs):
         """Append a transition to this replay buffer
 
         Args:
@@ -34,7 +34,7 @@ class ReplayBuffer(object):
         """
         experience = dict(state=state, action=action, reward=reward,
                           next_state=next_state, next_action=next_action,
-                          is_state_terminal=is_state_terminal)
+                          is_state_terminal=is_state_terminal, **kwargs)
         self.memory.append(experience)
 
     def sample(self, n):
