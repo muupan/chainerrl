@@ -141,6 +141,14 @@ class PrioritizedBuffer (object):
             probabilities.append(None)
         return indices, probabilities
 
+    def __getitem__(self, i):
+        if i < 0:
+            return self[len(self) + i]
+        elif i < len(self.data):
+            return self.data[i]
+        else:
+            return self.data_inf[i - len(self.data)]
+
 
 class SumTree (object):
     """Fast weighted sampling.
