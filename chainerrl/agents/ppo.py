@@ -161,6 +161,8 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             return
         if len(self.memory) + len(self.last_episode) >= self.update_interval:
             self._flush_last_episode()
+            assert len(self.memory) == sum(len(ep)
+                                           for ep in self.episodic_memory)
             self.update()
             self.memory = []
             self.episodic_memory = []
@@ -492,8 +494,10 @@ class ParallelPPO(PPO):
             return
         if self.update_interval > 0:
             self._batch_flush_last_episode()
+        assert len(self.memory) == sum(len(ep) for ep in self.episodic_memory)
         self.update()
         self.memory = []
+        self.episodic_memory = []
         self.n_episodes_in_memory = 0
 
     def _batch_flush_last_episode(self, finished_episodes_only=False):
@@ -509,6 +513,7 @@ class ParallelPPO(PPO):
             assert seq
             old_memory_size = len(self.memory)
             self.memory.extend(seq)
+            self.episodic_memory.append(seq)
             self.n_episodes_in_memory += 1
             self.last_episode[i] = []
             self.logger.debug('memory extend: %s + %s = %s n_episodes_in_memory: %s',
