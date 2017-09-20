@@ -25,6 +25,21 @@ def _F_clip(x, x_min, x_max):
     return F.minimum(F.maximum(x, x_min), x_max)
 
 
+def compute_mean_and_std_of_advantage(transitions):
+    advs = np.asarray([float(b['adv']) for b in transitions])
+    weights = np.asarray([float(b['weight']) for b in transitions])
+    mean = np.average(advs, weights=weights)
+    std = weighted_std(advs, weights=weights) + 1e-8
+    assert std > 0
+    return mean, std
+
+
+def normalize_advantage(transitions, mean, std):
+    assert std > 0
+    for b in transitions:
+        b['adv'] = (b['adv'] - mean) / std
+
+
 class PPO(agent.AttributeSavingMixin, agent.Agent):
     """Proximal Policy Optimization
 
@@ -71,6 +86,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                  clip_eps=0.2,
                  clip_eps_vf=0.2,
                  normalize_advantage=True,
+                 normalize_advantage_episodewise=False,
                  act_deterministically=False,
                  average_v_decay=0.999, average_loss_decay=0.99,
                  recurrent=False,
@@ -97,15 +113,9 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.clip_eps = clip_eps
         self.clip_eps_vf = clip_eps_vf
         self.normalize_advantage = normalize_advantage
+        self.normalize_advantage_episodewise = normalize_advantage_episodewise
         self.recurrent = recurrent
         self.logger = logger
-
-        # self.average_v = 0
-        # self.average_v_decay = average_v_decay
-        # self.average_loss_policy = 0
-        # self.average_loss_value_func = 0
-        # self.average_loss_entropy = 0
-        # self.average_loss_decay = average_loss_decay
 
         self.xp = self.model.xp
         self.last_state = None
@@ -160,8 +170,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         if self.last_episode:
             self._compute_teacher()
             self.memory.extend(self.last_episode)
-            if self.recurrent:
-                self.episodic_memory.append(self.last_episode)
+            self.episodic_memory.append(self.last_episode)
             self.last_episode = []
             self.n_episodes_in_memory += 1
 
@@ -287,24 +296,33 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             ret_var = np.var([float(b['v_teacher']) for b in self.memory])
             self.recorder.record('explained_variance', 1 - adv_var / ret_var)
 
-        self.recorder.record(
-            'raw_advantage',
-            np.asarray([float(b['adv']) for b in self.memory]))
+        raw_advs = np.asarray([float(b['adv']) for b in self.memory])
+        self.recorder.record('raw_advantage', raw_advs)
+        self.logger.debug(
+            'raw_advantage mean: %s std: %s', raw_advs.mean(), raw_advs.std())
 
         if self.normalize_advantage:
-            advs = np.asarray([float(b['adv']) for b in self.memory])
-            weights = np.asarray([float(b['weight']) for b in self.memory])
-            mean = np.average(advs, weights=weights)
-            std = weighted_std(advs, weights=weights)
-            self.logger.debug(
-                'advantage normlization mean: %s std: %s', mean, std)
-            for b in self.memory:
-                b['adv'] = (b['adv'] - mean) / std
+            if self.normalize_advantage_episodewise:
+                # Normalize each episode separately
+                for episode in self.episodic_memory:
+                    mean, std = compute_mean_and_std_of_advantage(episode)
+                    self.logger.debug(
+                            ('advantage normlization (episode-wise)'
+                             ' len: %s mean: %s std: %s'),  # NOQA
+                        len(episode), mean, std)
+                    normalize_advantage(episode, mean, std)
+            else:
+                mean, std = compute_mean_and_std_of_advantage(self.memory)
+                self.logger.debug(
+                    'advantage normlization (global) mean: %s std: %s',
+                    mean, std)
+                normalize_advantage(self.memory, mean, std)
 
             new_advs = np.asarray([float(b['adv']) for b in self.memory])
-            # np.testing.assert_allclose(np.mean(new_advs), 0, atol=1e-5)
-            # np.testing.assert_allclose(np.std(new_advs), 1, atol=1e-5)
             self.recorder.record('normalized_advantage', new_advs)
+            self.logger.debug(
+                'normalized_advantage mean: %s std: %s',
+                new_advs.mean(), new_advs.std())
 
         if self.recurrent:
             batch_size = min(self.n_episodes_in_memory, self.minibatch_size)
