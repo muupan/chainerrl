@@ -235,7 +235,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         # Update stats
         self.recorder.record('policy_loss', float(loss_policy.data))
         self.recorder.record('vf_loss', float(loss_value_func.data))
-        self.recorder.record('policy_entropy', -float(loss_entropy.data))
+        self.recorder.record('policy_entropy', chainer.cuda.to_cpu(ent.data))
 
         return (
             loss_policy
