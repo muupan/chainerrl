@@ -371,7 +371,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         # Update stats
         self.recorder.record('value', float(v))
 
-        if self.last_state is not None and weight > 0:
+        if self.last_state is not None:
             self.last_episode.append({
                 'state': self.last_state,
                 'action': self.last_action,
@@ -400,17 +400,16 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         _, v = self._act(state, train=False, deterministic=False)
 
         assert self.last_state is not None
-        if weight > 0:
-            self.last_episode.append({
-                'state': self.last_state,
-                'action': self.last_action,
-                'reward': reward,
-                'v_pred': self.last_v,
-                'next_state': state,
-                'next_v_pred': v,
-                'nonterminal': 0.0 if done else 1.0,
-                'weight': weight,
-            })
+        self.last_episode.append({
+            'state': self.last_state,
+            'action': self.last_action,
+            'reward': reward,
+            'v_pred': self.last_v,
+            'next_state': state,
+            'next_v_pred': v,
+            'nonterminal': 0.0 if done else 1.0,
+            'weight': weight,
+        })
 
         self.last_state = None
         del self.last_action
@@ -460,18 +459,17 @@ class ParallelPPO(PPO):
         for i in range(len(states)):
             if self.last_state[i] is not None:
                 assert rewards[i] is not None
-                if weights[i] > 0:
-                    self.last_episode[i].append({
-                        'state': self.last_state[i],
-                        'action': self.last_action[i],
-                        'reward': rewards[i],
-                        'v_pred': self.last_v[i],
-                        'next_state': states[i],
-                        'next_v_pred': v[i],
-                        'nonterminal': 0. if dones[i] else 1.,
-                        'uninterrupted': 0. if interrupts[i] else 1.,
-                        'weight': weights[i],
-                    })
+                self.last_episode[i].append({
+                    'state': self.last_state[i],
+                    'action': self.last_action[i],
+                    'reward': rewards[i],
+                    'v_pred': self.last_v[i],
+                    'next_state': states[i],
+                    'next_v_pred': v[i],
+                    'nonterminal': 0. if dones[i] else 1.,
+                    'uninterrupted': 0. if interrupts[i] else 1.,
+                    'weight': weights[i],
+                })
             if dones[i] or interrupts[i]:
                 self.last_state[i] = None
                 self.last_action[i] = None
