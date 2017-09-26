@@ -40,6 +40,12 @@ def normalize_advantage(transitions, mean, std):
         b['adv'] = (b['adv'] - mean) / std
 
 
+def clip_advantage(transitions, max_abs_advantage):
+    assert max_abs_advantage > 0
+    for b in transitions:
+        b['adv'] = b['adv'].clip(min=-max_abs_advantage, max=max_abs_advantage)
+
+
 class PPO(agent.AttributeSavingMixin, agent.Agent):
     """Proximal Policy Optimization
 
@@ -87,6 +93,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                  clip_eps_vf=0.2,
                  normalize_advantage=True,
                  normalize_advantage_episodewise=False,
+                 max_abs_advantage=None,
                  act_deterministically=False,
                  average_v_decay=0.999, average_loss_decay=0.99,
                  recurrent=False,
@@ -114,6 +121,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.clip_eps_vf = clip_eps_vf
         self.normalize_advantage = normalize_advantage
         self.normalize_advantage_episodewise = normalize_advantage_episodewise
+        self.max_abs_advantage = max_abs_advantage
         self.recurrent = recurrent
         self.logger = logger
 
@@ -317,6 +325,9 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                     'advantage normlization (global) mean: %s std: %s',
                     mean, std)
                 normalize_advantage(self.memory, mean, std)
+
+            if self.max_abs_advantage is not None:
+                clip_advantage(self.memory, self.max_abs_advantage)
 
             new_advs = np.asarray([float(b['adv']) for b in self.memory])
             self.recorder.record('normalized_advantage', new_advs)
