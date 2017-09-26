@@ -130,13 +130,13 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.recorder.register('value', maxlen=1000)
         self.recorder.register('vf_loss', maxlen=1000)
         self.recorder.register('policy_loss', maxlen=1000)
-        self.recorder.register('policy_entropy', maxlen=1000)
-        self.recorder.register('policy_kl', maxlen=1000)
-        self.recorder.register('prob_ratio', maxlen=1000)
-        self.recorder.register('value_change', maxlen=1000)
-        self.recorder.register('explained_variance', maxlen=100)
-        self.recorder.register('raw_advantage', maxlen=1000)
-        self.recorder.register('normalized_advantage', maxlen=1000)
+        self.recorder.register('policy_entropy', maxlen=10000)
+        self.recorder.register('policy_kl', maxlen=10000)
+        self.recorder.register('prob_ratio', maxlen=10000)
+        self.recorder.register('value_change', maxlen=10000)
+        self.recorder.register('explained_variance', maxlen=1000)
+        self.recorder.register('raw_advantage', maxlen=10000)
+        self.recorder.register('normalized_advantage', maxlen=10000)
 
     def _act(self, state, train, deterministic):
         xp = self.xp
