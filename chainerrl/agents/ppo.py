@@ -340,6 +340,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             dataset_iter = chainer.iterators.SerialIterator(
                 self.memory, self.minibatch_size)
             dataset_iter.reset()
+            last_batch = None
             while dataset_iter.epoch < self.epochs:
                 batch = dataset_iter.__next__()
                 states = batch_states([b['state']
@@ -350,6 +351,17 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 distribs, vs_pred = self.model(states)
                 with chainer.no_backprop_mode():
                     target_distribs, _ = target_model(states)
+                # Compute KL div.
+                kl = target_distribs.kl(distribs)
+                self.recorder.record('policy_kl', kl.data)
+                if kl.data.max() > 1.0:
+                    self.logger.warning('max_kl > 1.0')
+                    self.logger.warning('max_kl: %s', kl.data.max())
+                    self.logger.warning('current_batch: %s', batch)
+                    self.logger.warning('last_batch: %s', last_batch)
+                    self.logger.warning('stats: %s', self.get_statistics())
+                    self.logger.warning('memory: %s', self.memory)
+                    assert False
                 self.optimizer.update(
                     self._lossfun,
                     distribs, vs_pred, distribs.log_prob(actions),
@@ -362,14 +374,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                         [b['v_teacher'] for b in batch], dtype=xp.float32),
                     weights=weights,
                 )
-                # Compute KL div. after update
-                kl = target_distribs.kl(distribs)
-                self.recorder.record('policy_kl', kl.data)
-                if kl.data.max() > 1.0:
-                    self.logger.warning('max_kl > 1.0')
-                    self.logger.warning('batch: %s', batch)
-                    self.logger.warning('stats: %s', self.get_statistics())
-                    assert False
+                last_batch = batch
 
     def act_and_train(self, state, reward, weight=1.0):
         action, v = self._act(state, train=False, deterministic=False)
