@@ -214,8 +214,6 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             prob_ratio * advs,
             F.clip(prob_ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advs))
         self.recorder.record('prob_ratio', prob_ratio.data)
-        kl = target_distribs.kl(distribs)
-        self.recorder.record('policy_kl', kl.data)
 
         if self.clip_eps_vf is None:
             loss_value_func = weighted_mean(
@@ -364,6 +362,14 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                         [b['v_teacher'] for b in batch], dtype=xp.float32),
                     weights=weights,
                 )
+                # Compute KL div. after update
+                kl = target_distribs.kl(distribs)
+                self.recorder.record('policy_kl', kl.data)
+                if kl.data.max() > 1.0:
+                    self.logger.warning('max_kl > 1.0')
+                    self.logger.warning('batch: %s', batch)
+                    self.logger.warning('stats: %s', self.get_statistics())
+                    assert False
 
     def act_and_train(self, state, reward, weight=1.0):
         action, v = self._act(state, train=False, deterministic=False)
