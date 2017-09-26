@@ -356,12 +356,15 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 self.recorder.record('policy_kl', kl.data)
                 if kl.data.max() > 1.0:
                     self.logger.warning('max_kl > 1.0')
-                    self.logger.warning('max_kl: %s', kl.data.max())
-                    self.logger.warning('current_batch: %s', batch)
-                    self.logger.warning('last_batch: %s', last_batch)
-                    self.logger.warning('stats: %s', self.get_statistics())
-                    self.logger.warning('memory: %s', self.memory)
-                    assert False
+                    import time
+                    log_file = 'max_kl_warning_' + str(time.time()) + '.log'
+                    with open(log_file, 'w') as f:
+                        print('max_kl:', kl.data.max(), file=f)
+                        print('current_batch:', batch, file=f)
+                        print('last_batch:', last_batch, file=f)
+                        print('stats:', self.get_statistics(), file=f)
+                        print('memory:', self.memory, file=f)
+                    self.logger.warning('log: %s', log_file)
                 self.optimizer.update(
                     self._lossfun,
                     distribs, vs_pred, distribs.log_prob(actions),
