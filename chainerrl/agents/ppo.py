@@ -403,7 +403,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             all_states = batch_states(
                 [b['state'] for b in self.memory], xp, self.phi)
             all_weights = xp.array([b['weight']
-                                    for b in batch], dtype=np.float32)
+                                    for b in self.memory], dtype=np.float32)
             self.line_search(target_model, all_states, all_weights)
 
     def line_search(self, old_model, states, weights):
