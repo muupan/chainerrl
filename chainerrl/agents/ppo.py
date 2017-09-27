@@ -402,16 +402,20 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         if self.max_kl is not None:
             all_states = batch_states(
                 [b['state'] for b in self.memory], xp, self.phi)
-            self.line_search(target_model, all_states)
+            all_weights = xp.array([b['weight']
+                                    for b in batch], dtype=np.float32)
+            self.line_search(target_model, all_states, all_weights)
 
-    def line_search(self, old_model, states):
+    def line_search(self, old_model, states, weights):
         assert not self.recurrent
         with chainer.no_backprop_mode():
             old_distribs, _ = old_model(states)
             while True:
                 distribs, _ = self.model(states)
                 kl = old_distribs.kl(distribs)
-                cur_max_kl = kl.data.max()
+                # KL div. should be weighted so that samples with zero weight
+                # are ignored when computing max KL div.
+                cur_max_kl = (kl.data * weights).max()
                 self.logger.info('line search kl: %s', cur_max_kl)
                 if cur_max_kl < self.max_kl:
                     break
