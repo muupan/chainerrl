@@ -375,7 +375,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 # Compute KL div.
                 kl = target_distribs.kl(distribs)
                 self.recorder.record('policy_kl', kl.data)
-                if kl.data.max() > 1.0:
+                if self.max_kl is None and kl.data.max() > 1.0:
                     self.logger.warning('max_kl > 1.0')
                     import time
                     log_file = 'max_kl_warning_' + str(time.time()) + '.log'
