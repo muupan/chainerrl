@@ -46,6 +46,14 @@ def clip_advantage(transitions, max_abs_advantage):
         b['adv'] = b['adv'].clip(min=-max_abs_advantage, max=max_abs_advantage)
 
 
+def merge_model_params(model_from, model_to):
+    params_from = sorted(model_from.namedparams(), key=lambda x: x[0])
+    params_to = sorted(model_to.namedparams(), key=lambda x: x[0])
+    for param_from, param_to in zip(params_from, params_to):
+        assert param_from[0] == param_to[0]
+        param_to[1].data[:] = 0.5 * param_to[1].data + 0.5 * param_from[1].data
+
+
 class PPO(agent.AttributeSavingMixin, agent.Agent):
     """Proximal Policy Optimization
 
@@ -97,6 +105,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                  act_deterministically=False,
                  average_v_decay=0.999, average_loss_decay=0.99,
                  recurrent=False,
+                 max_kl=None,
                  logger=logging.getLogger(__name__),
                  ):
         self.model = model
@@ -123,6 +132,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.normalize_advantage_episodewise = normalize_advantage_episodewise
         self.max_abs_advantage = max_abs_advantage
         self.recurrent = recurrent
+        self.max_kl = max_kl
         self.logger = logger
 
         self.xp = self.model.xp
@@ -389,6 +399,24 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                     weights=weights,
                 )
                 last_batch = batch
+        if self.max_kl is not None:
+            all_states = batch_states(
+                [b['state'] for b in self.memory], xp, self.phi)
+            self.line_search(target_model, all_states)
+
+    def line_search(self, old_model, states):
+        assert not self.recurrent
+        with chainer.no_backprop_mode():
+            old_distribs, _ = old_model(states)
+            while True:
+                distribs, _ = self.model(states)
+                kl = old_distribs.kl(distribs)
+                cur_max_kl = kl.data.max()
+                self.logger.info('line search kl: %s', cur_max_kl)
+                if cur_max_kl < self.max_kl:
+                    break
+                merge_model_params(model_from=old_model,
+                                   model_to=self.model)
 
     def act_and_train(self, state, reward, weight=1.0):
         action, v = self._act(state, train=False, deterministic=False)
