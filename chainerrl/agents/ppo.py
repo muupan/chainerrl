@@ -25,11 +25,15 @@ def _F_clip(x, x_min, x_max):
     return F.minimum(F.maximum(x, x_min), x_max)
 
 
-def compute_mean_and_std_of_advantage(transitions):
+def compute_mean_and_std_of_advantage(transitions, use_weights):
     advs = np.asarray([float(b['adv']) for b in transitions])
-    weights = np.asarray([float(b['weight']) for b in transitions])
-    mean = np.average(advs, weights=weights)
-    std = weighted_std(advs, weights=weights) + 1e-8
+    if use_weights:
+        weights = np.asarray([float(b['weight']) for b in transitions])
+        mean = np.average(advs, weights=weights)
+        std = weighted_std(advs, weights=weights) + 1e-8
+    else:
+        mean = np.average(advs)
+        std = np.std(advs) + 1e-8
     assert std > 0
     return mean, std
 
@@ -106,6 +110,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                  average_v_decay=0.999, average_loss_decay=0.99,
                  recurrent=False,
                  max_kl=None,
+                 use_weights_in_advantage_normalization=True,
                  logger=logging.getLogger(__name__),
                  ):
         self.model = model
@@ -133,6 +138,8 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.max_abs_advantage = max_abs_advantage
         self.recurrent = recurrent
         self.max_kl = max_kl
+        self.use_weights_in_advantage_normalization = \
+            use_weights_in_advantage_normalization
         self.logger = logger
 
         self.xp = self.model.xp
@@ -323,14 +330,18 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             if self.normalize_advantage_episodewise:
                 # Normalize each episode separately
                 for episode in self.episodic_memory:
-                    mean, std = compute_mean_and_std_of_advantage(episode)
+                    mean, std = compute_mean_and_std_of_advantage(
+                        episode,
+                        self.use_weights_in_advantage_normalization)
                     self.logger.debug(
                             ('advantage normlization (episode-wise)'
                              ' len: %s mean: %s std: %s'),  # NOQA
                         len(episode), mean, std)
                     normalize_advantage(episode, mean, std)
             else:
-                mean, std = compute_mean_and_std_of_advantage(self.memory)
+                mean, std = compute_mean_and_std_of_advantage(
+                    self.memory,
+                    self.use_weights_in_advantage_normalization)
                 self.logger.debug(
                     'advantage normlization (global) mean: %s std: %s',
                     mean, std)
