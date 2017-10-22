@@ -51,11 +51,22 @@ def clip_advantage(transitions, max_abs_advantage):
 
 
 def merge_model_params(model_from, model_to):
+    # Merge params
     params_from = sorted(model_from.namedparams(), key=lambda x: x[0])
     params_to = sorted(model_to.namedparams(), key=lambda x: x[0])
     for param_from, param_to in zip(params_from, params_to):
         assert param_from[0] == param_to[0]
         param_to[1].data[:] = 0.5 * param_to[1].data + 0.5 * param_from[1].data
+    # BN statistics
+    links_from = sorted(model_from.namedlinks(), key=lambda x: x[0])
+    links_to = sorted(model_to.namedlinks(), key=lambda x: x[0])
+    for link_from, link_to in zip(links_from, links_to):
+        assert link_from[0] == link_to[0]
+        if isinstance(link_from[1], chainer.links.BatchNormalization):
+            link_to[1].avg_mean[:] = (0.5 * link_to[1].avg_mean
+                                      + 0.5 * link_from[1].avg_mean)
+            link_to[1].avg_var[:] = (0.5 * link_to[1].avg_var
+                                     + 0.5 * link_from[1].avg_var)
 
 
 class PPO(agent.AttributeSavingMixin, agent.Agent):
