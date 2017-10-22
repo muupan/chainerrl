@@ -392,7 +392,8 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 weights = xp.array([b['weight']
                                     for b in batch], dtype=np.float32)
                 distribs, vs_pred = self.model(states)
-                with chainer.no_backprop_mode():
+                with chainer.no_backprop_mode(), \
+                        chainer.using_config('train', False):
                     target_distribs, _ = target_model(states)
                 # Compute KL div.
                 kl = target_distribs.kl(distribs)
@@ -430,7 +431,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
 
     def line_search(self, old_model, states, weights):
         assert not self.recurrent
-        with chainer.no_backprop_mode():
+        with chainer.no_backprop_mode(), chainer.using_config('train', False):
             old_distribs, _ = old_model(states)
             while True:
                 distribs, _ = self.model(states)
