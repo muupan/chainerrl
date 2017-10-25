@@ -380,8 +380,9 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 self.update_from_episodes(batch_episodes, target_model)
                 it += 1
         else:
+            batch_size = min(len(self.memory), self.minibatch_size)
             dataset_iter = chainer.iterators.SerialIterator(
-                self.memory, self.minibatch_size)
+                self.memory, batch_size)
             dataset_iter.reset()
             last_batch = None
             while dataset_iter.epoch < self.epochs:
