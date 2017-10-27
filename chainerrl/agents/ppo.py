@@ -57,16 +57,29 @@ def merge_model_params(model_from, model_to):
     for param_from, param_to in zip(params_from, params_to):
         assert param_from[0] == param_to[0]
         param_to[1].data[:] = 0.5 * param_to[1].data + 0.5 * param_from[1].data
-    # BN statistics
     links_from = sorted(model_from.namedlinks(), key=lambda x: x[0])
     links_to = sorted(model_to.namedlinks(), key=lambda x: x[0])
     for link_from, link_to in zip(links_from, links_to):
-        assert link_from[0] == link_to[0]
-        if isinstance(link_from[1], chainer.links.BatchNormalization):
-            link_to[1].avg_mean[:] = (0.5 * link_to[1].avg_mean
-                                      + 0.5 * link_from[1].avg_mean)
-            link_to[1].avg_var[:] = (0.5 * link_to[1].avg_var
-                                     + 0.5 * link_from[1].avg_var)
+        link_name_from, link_obj_from = link_from
+        link_name_to, link_obj_to = link_to
+        assert link_name_from == link_name_to
+        # BN statistics
+        if isinstance(link_obj_from, chainer.links.BatchNormalization):
+            link_obj_to.avg_mean[:] = (0.5 * link_obj_to.avg_mean
+                                       + 0.5 * link_obj_from.avg_mean)
+            link_obj_to.avg_var[:] = (0.5 * link_obj_to.avg_var
+                                      + 0.5 * link_obj_from.avg_var)
+        # elif isinstance(link_obj_from, EmpiricalNormalization):
+        elif (hasattr(link_obj_from, 'sum')
+                and hasattr(link_obj_from, 'sumsq')
+                and hasattr(link_obj_from, 'count')):
+            # EmpiricalNormalization
+            link_obj_to.sum[:] = (0.5 * link_obj_to.sum
+                                  + 0.5 * link_obj_from.sum)
+            link_obj_to.sumsq[:] = (0.5 * link_obj_to.sumsq
+                                    + 0.5 * link_obj_from.sumsq)
+            link_obj_to.count[:] = (0.5 * link_obj_to.count
+                                    + 0.5 * link_obj_from.count)
 
 
 class PPO(agent.AttributeSavingMixin, agent.Agent):
@@ -431,6 +444,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             self.line_search(target_model, all_states, all_weights)
 
     def line_search(self, old_model, states, weights):
+        """Guarantee max_kl constraint by line search."""
         assert not self.recurrent
         with chainer.no_backprop_mode(), chainer.using_config('train', False):
             old_distribs, _ = old_model(states)
