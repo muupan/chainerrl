@@ -135,6 +135,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                  recurrent=False,
                  max_kl=None,
                  use_weights_in_advantage_normalization=True,
+                 normalize_weights=False,
                  logger=logging.getLogger(__name__),
                  ):
         self.model = model
@@ -164,6 +165,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
         self.max_kl = max_kl
         self.use_weights_in_advantage_normalization = \
             use_weights_in_advantage_normalization
+        self.normalize_weights = normalize_weights
         self.logger = logger
 
         self.xp = self.model.xp
@@ -247,16 +249,22 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                  distribs, vs_pred, log_probs,
                  vs_pred_old, target_log_probs,
                  advs, vs_teacher, weights):
+
         prob_ratio = F.exp(log_probs - target_log_probs)
         ent = distribs.entropy
 
         def weighted_mean(xs):
-            # Divide by N, not the sum of weights
             if xs.shape != weights.shape:
                 w = F.broadcast_to(weights[..., None], xs.shape)
             else:
                 w = weights
-            return F.mean(xs * w)
+            if self.normalize_weights:
+                # Divide by the sum of weights
+                w = w / F.broadcast_to(F.sum(w), w.shape)
+                return F.sum(xs * w)
+            else:
+                # Divide by N
+                return F.mean(xs * w)
 
         prob_ratio = F.expand_dims(prob_ratio, axis=-1)
         loss_policy = - weighted_mean(F.minimum(
