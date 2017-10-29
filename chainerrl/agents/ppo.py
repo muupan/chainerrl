@@ -530,15 +530,22 @@ class ParallelPPO(PPO):
         assert len(dones) == n_actors
         assert len(interrupts) == n_actors
         assert not self.recurrent, 'not yet implemented'
-        # Initialization depending on the number of actors
-        if self.last_state is None or len(self.last_state) < n_actors:
-            if self.last_state is not None:
-                self.logger.debug('Number of actors increased from %s to %s.',
-                                  len(self.last_state), n_actors)
+        if self.last_state is None:
+            # Initialize temporal values
             self.last_state = [None] * n_actors
             self.last_action = [None] * n_actors
             self.last_v = [None] * n_actors
             self.last_episode = [[] for _ in range(n_actors)]
+        elif len(self.last_state) < n_actors:
+            # Extend temporal values
+            self.logger.debug('Number of actors increased from %s to %s.',
+                              len(self.last_state), n_actors)
+            increase_size = n_actors - len(self.last_state)
+            assert increase_size > 0
+            self.last_state.extend([None] * increase_size)
+            self.last_action.extend([None] * increase_size)
+            self.last_v.extend([None] * increase_size)
+            self.last_episode.extend([[] for _ in range(increase_size)])
         # Select an action for each state
         with chainer.using_config('train', False), chainer.no_backprop_mode():
             b_state = batch_states(states, self.xp, self.phi)
@@ -546,14 +553,12 @@ class ParallelPPO(PPO):
             actions = cuda.to_cpu(action_distrib.sample().data)
             v = cuda.to_cpu(v.data)
         self.recorder.record('value', v)
-        # Update stats
-        # self.average_v += (
-        #     (1 - self.average_v_decay) *
-        #     (float(v.mean()) - self.average_v))
         # Put experiences into the buffer
         for i in range(len(states)):
             if self.last_state[i] is not None:
                 assert rewards[i] is not None
+                assert self.last_state[i] is not None
+                assert self.last_v[i] is not None
                 self.last_episode[i].append({
                     'state': self.last_state[i],
                     'action': self.last_action[i],
@@ -583,10 +588,12 @@ class ParallelPPO(PPO):
         n_transitions = sum(len(ep) for ep in self.last_episode)
         if self.update_interval > 0 and n_transitions < self.update_interval:
             return
-        if self.update_interval_episodes > 0 and self.n_episodes_in_memory < self.update_interval_episodes:
+        if (self.update_interval_episodes > 0
+                and self.n_episodes_in_memory < self.update_interval_episodes):
             return
         if self.update_interval > 0:
             self._batch_flush_last_episode()
+            assert all(len(seq) == 0 for seq in self.last_episode)
         assert len(self.memory) == sum(len(ep) for ep in self.episodic_memory)
         self.update()
         self.memory = []
@@ -609,8 +616,10 @@ class ParallelPPO(PPO):
             self.episodic_memory.append(seq)
             self.n_episodes_in_memory += 1
             self.last_episode[i] = []
-            self.logger.debug('memory extend: %s + %s = %s n_episodes_in_memory: %s',
-                              old_memory_size, len(seq), len(self.memory), self.n_episodes_in_memory)
+            self.logger.debug(
+                'memory extend: %s + %s = %s n_episodes_in_memory: %s',
+                old_memory_size, len(seq), len(self.memory),
+                self.n_episodes_in_memory)
 
     def _batch_compute_teacher(self, finished_episodes_only=False):
         """Estimate state values and advantages of self.last_episode
@@ -624,23 +633,32 @@ class ParallelPPO(PPO):
                     and (seq[-1]['nonterminal']
                          + seq[-1]['uninterrupted']) == 2.):
                 continue
-            adv = 0.0
-            for transition in reversed(seq):
-                reward = transition['reward']
-                assert reward is not None
-                td_err = (
-                    reward
-                    + (self.gamma * transition['nonterminal']
-                       * transition['next_v_pred'])
-                    - transition['v_pred']
-                )
-                # Since seq may contain multiple episodes, you have to
-                # truncate GAE when interrupted or terminaal
-                adv = (td_err
-                       + (transition['uninterrupted']
-                           * transition['nonterminal']
-                           * self.gamma
-                           * self.lambd
-                           * adv))
-                transition['adv'] = adv
-                transition['v_teacher'] = adv + transition['v_pred']
+            add_advantage_and_value_target_to_sequence(
+                seq, gamma=self.gamma, lambd=self.lambd)
+
+
+def add_advantage_and_value_target_to_sequence(seq, gamma, lambd):
+    adv = 0.0
+    assert 0 <= gamma <= 1
+    assert 0 <= lambd <= 1
+    for transition in reversed(seq):
+        reward = transition['reward']
+        assert reward is not None
+        td_err = (
+            reward
+            + (gamma * transition['nonterminal']
+               * transition['next_v_pred'])
+            - transition['v_pred']
+        )
+        # Since seq may contain multiple episodes, you have to
+        # truncate GAE when interrupted or terminaal
+        adv = (td_err
+               + (transition['uninterrupted']
+                   * transition['nonterminal']
+                   * gamma
+                   * lambd
+                   * adv))
+        assert 'adv' not in transition
+        assert 'v_teacher' not in transition
+        transition['adv'] = adv
+        transition['v_teacher'] = adv + transition['v_pred']
