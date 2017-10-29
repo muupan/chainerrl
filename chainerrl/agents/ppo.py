@@ -245,7 +245,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
 
     def _lossfun(self,
                  distribs, vs_pred, log_probs,
-                 target_distribs, vs_pred_old, target_log_probs,
+                 vs_pred_old, target_log_probs,
                  advs, vs_teacher, weights):
         prob_ratio = F.exp(log_probs - target_log_probs)
         ent = distribs.entropy
@@ -397,51 +397,50 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             dataset_iter = chainer.iterators.SerialIterator(
                 self.memory, batch_size)
             dataset_iter.reset()
-            last_batch = None
             while dataset_iter.epoch < self.epochs:
                 batch = dataset_iter.__next__()
-                states = batch_states([b['state']
-                                       for b in batch], xp, self.phi)
-                actions = xp.array([b['action'] for b in batch])
-                weights = xp.array([b['weight']
-                                    for b in batch], dtype=np.float32)
-                distribs, vs_pred = self.model(states)
-                with chainer.no_backprop_mode(), \
-                        chainer.using_config('train', False):
-                    target_distribs, _ = target_model(states)
-                # Compute KL div.
-                kl = target_distribs.kl(distribs)
-                self.recorder.record('policy_kl', kl.data)
-                if self.max_kl is None and kl.data.max() > 1.0:
-                    self.logger.warning('max_kl > 1.0')
-                    import time
-                    log_file = 'max_kl_warning_' + str(time.time()) + '.log'
-                    with open(log_file, 'w') as f:
-                        print('max_kl:', kl.data.max(), file=f)
-                        print('current_batch:', batch, file=f)
-                        print('last_batch:', last_batch, file=f)
-                        print('stats:', self.get_statistics(), file=f)
-                        print('memory:', self.memory, file=f)
-                    self.logger.warning('log: %s', log_file)
-                self.optimizer.update(
-                    self._lossfun,
-                    distribs, vs_pred, distribs.log_prob(actions),
-                    target_distribs=target_distribs,
-                    vs_pred_old=xp.array(
-                        [b['v_pred'] for b in batch], dtype=xp.float32),
-                    target_log_probs=target_distribs.log_prob(actions),
-                    advs=xp.array([b['adv'] for b in batch], dtype=xp.float32),
-                    vs_teacher=xp.array(
-                        [b['v_teacher'] for b in batch], dtype=xp.float32),
-                    weights=weights,
-                )
-                last_batch = batch
+                self.update_from_transitions(batch, target_model)
+
         if self.max_kl is not None:
             all_states = batch_states(
                 [b['state'] for b in self.memory], xp, self.phi)
             all_weights = xp.array([b['weight']
                                     for b in self.memory], dtype=np.float32)
             self.line_search(target_model, all_states, all_weights)
+
+    def update_from_transitions(self, batch, target_model):
+        xp = self.model.xp
+        states = batch_states([b['state']
+                               for b in batch], xp, self.phi)
+        actions = xp.array([b['action'] for b in batch])
+        weights = xp.array([b['weight']
+                            for b in batch], dtype=np.float32)
+        vs_pred_old = xp.array(
+            [b['v_pred'] for b in batch], dtype=xp.float32)
+
+        distribs, vs_pred = self.model(states)
+
+        with chainer.no_backprop_mode(), \
+                chainer.using_config('train', False):
+            target_distribs, target_v = target_model(states)
+            xp.testing.assert_allclose(target_v.data, vs_pred_old, atol=1e-4)
+            target_log_probs = target_distribs.log_prob(actions)
+            # Compute KL div.
+            kl = target_distribs.kl(distribs)
+            self.recorder.record('policy_kl', kl.data)
+
+        self.optimizer.update(
+            self._lossfun,
+            distribs=distribs,
+            vs_pred=vs_pred,
+            log_probs=distribs.log_prob(actions),
+            vs_pred_old=vs_pred_old,
+            target_log_probs=target_log_probs,
+            advs=xp.array([b['adv'] for b in batch], dtype=xp.float32),
+            vs_teacher=xp.array(
+                [b['v_teacher'] for b in batch], dtype=xp.float32),
+            weights=weights,
+        )
 
     def line_search(self, old_model, states, weights):
         """Guarantee max_kl constraint by line search."""
@@ -570,6 +569,20 @@ class ParallelPPO(PPO):
                     'uninterrupted': 0. if interrupts[i] else 1.,
                     'weight': weights[i],
                 })
+
+        if self.update_interval_episodes > 0:
+            self._batch_flush_last_episode(True)
+
+        if self._batch_train():
+            # Recompute actions and v with updated parameters
+            with chainer.using_config('train', False), \
+                    chainer.no_backprop_mode():
+                b_state = batch_states(states, self.xp, self.phi)
+                action_distrib, v = self.model(b_state)
+                actions = cuda.to_cpu(action_distrib.sample().data)
+                v = cuda.to_cpu(v.data)
+
+        for i in range(len(states)):
             if dones[i] or interrupts[i]:
                 self.last_state[i] = None
                 self.last_action[i] = None
@@ -579,18 +592,15 @@ class ParallelPPO(PPO):
                 self.last_action[i] = actions[i]
                 self.last_v[i] = v[i]
 
-        if self.update_interval_episodes > 0:
-            self._batch_flush_last_episode(True)
-        self._batch_train()
         return actions
 
     def _batch_train(self):
         n_transitions = sum(len(ep) for ep in self.last_episode)
         if self.update_interval > 0 and n_transitions < self.update_interval:
-            return
+            return False
         if (self.update_interval_episodes > 0
                 and self.n_episodes_in_memory < self.update_interval_episodes):
-            return
+            return False
         if self.update_interval > 0:
             self._batch_flush_last_episode()
             assert all(len(seq) == 0 for seq in self.last_episode)
@@ -599,6 +609,7 @@ class ParallelPPO(PPO):
         self.memory = []
         self.episodic_memory = []
         self.n_episodes_in_memory = 0
+        return True
 
     def _batch_flush_last_episode(self, finished_episodes_only=False):
         self._batch_compute_teacher(finished_episodes_only)
@@ -654,8 +665,8 @@ def add_advantage_and_value_target_to_sequence(seq, gamma, lambd):
         # truncate GAE when interrupted or terminaal
         adv = (td_err
                + (transition['uninterrupted']
-                   * transition['nonterminal']
-                   * gamma
+                  * transition['nonterminal']
+                  * gamma
                    * lambd
                    * adv))
         assert 'adv' not in transition
