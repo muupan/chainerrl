@@ -206,18 +206,22 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
             return cuda.to_cpu(action.data)[0], v.data[0]
 
     def _train(self):
-        if self.update_interval > 0 and len(self.memory) + len(self.last_episode) < self.update_interval:
-            return
-        if self.update_interval_episodes > 0 and self.n_episodes_in_memory < self.update_interval_episodes:
-            return
-        if len(self.memory) + len(self.last_episode) >= self.update_interval:
+        if (self.update_interval > 0
+                and len(self.memory) + len(self.last_episode) < self.update_interval):
+            return False
+        if (self.update_interval_episodes > 0
+                and self.n_episodes_in_memory < self.update_interval_episodes):
+            return False
+        if (self.update_interval > 0
+                and len(self.memory) + len(self.last_episode) >= self.update_interval):
             self._flush_last_episode()
-            assert len(self.memory) == sum(len(ep)
-                                           for ep in self.episodic_memory)
-            self.update()
-            self.memory = []
-            self.episodic_memory = []
-            self.n_episodes_in_memory = 0
+        assert len(self.memory) == sum(len(ep)
+                                       for ep in self.episodic_memory)
+        self.update()
+        self.memory = []
+        self.episodic_memory = []
+        self.n_episodes_in_memory = 0
+        return True
 
     def _flush_last_episode(self):
         if self.last_episode:
@@ -484,11 +488,15 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 'nonterminal': 1.0,
                 'weight': weight,
             })
+
+        if self._train():
+            # Recompute action and v with updated parameters
+            action, v = self._act(state, train=False, deterministic=False)
+
         self.last_state = state
         self.last_action = action
         self.last_v = v
 
-        self._train()
         return action
 
     def act(self, state):
