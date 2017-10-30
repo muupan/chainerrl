@@ -264,7 +264,7 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                 w = weights
             if self.normalize_weights:
                 # Divide by the sum of weights
-                w = w / F.broadcast_to(F.sum(w), w.shape)
+                w = w / F.broadcast_to(F.sum(w) + 1e-8, w.shape)
                 return F.sum(xs * w)
             else:
                 # Divide by N
