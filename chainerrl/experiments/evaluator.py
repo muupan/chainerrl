@@ -148,7 +148,8 @@ class Evaluator(object):
             column_names = _basic_columns + custom_columns
             print('\t'.join(column_names), file=f)
 
-    def evaluate_and_update_max_score(self, t, episodes):
+    def evaluate_and_update_max_score(self, t, episodes,
+                                      save_agent_if_best=True):
         eval_stats = eval_performance(
             self.env, self.agent, self.n_runs,
             max_episode_len=self.max_episode_len, explorer=self.explorer,
@@ -166,16 +167,22 @@ class Evaluator(object):
                   eval_stats['min']) + custom_values
         record_stats(self.outdir, values)
         if mean > self.max_score:
-            update_best_model(self.agent, self.outdir, t, self.max_score, mean,
-                              logger=self.logger)
+            self.logger.info('The best score is updated %s -> %s',
+                             self.max_score, mean)
             self.max_score = mean
+            if save_agent_if_best:
+                save_agent(self.agent, t, self.outdir,
+                           self.logger, suffix='_best')
+
+        self.prev_eval_t = t - t % self.eval_interval
         return mean
 
+    def time_to_evaluate(self, t):
+        return t >= self.prev_eval_t + self.eval_interval
+
     def evaluate_if_necessary(self, t, episodes):
-        if t >= self.prev_eval_t + self.eval_interval:
-            score = self.evaluate_and_update_max_score(t, episodes)
-            self.prev_eval_t = t - t % self.eval_interval
-            return score
+        if self.time_to_evaluate():
+            return self.evaluate_and_update_max_score(t, episodes)
         return None
 
 

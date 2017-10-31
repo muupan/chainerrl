@@ -10,6 +10,7 @@ import os
 
 from chainerrl.experiments.evaluator import Evaluator
 from chainerrl.experiments.evaluator import save_agent
+from chainerrl.experiments import SavingCondition
 from chainerrl.misc.ask_yes_no import ask_yes_no
 from chainerrl.misc.makedirs import makedirs
 
@@ -29,7 +30,13 @@ def ask_and_save_agent_replay_buffer(agent, t, outdir, suffix=''):
 
 def train_agent(agent, env, steps, outdir, max_episode_len=None,
                 step_offset=0, evaluator=None, successful_score=None,
-                step_hooks=[], logger=None):
+                step_hooks=[],
+                agent_saving_condition=(
+                    SavingCondition.best_evaluation_score,
+                    SavingCondition.completion,
+                    SavingCondition.error,
+                ),
+                logger=None):
 
     logger = logger or logging.getLogger(__name__)
 
@@ -65,9 +72,15 @@ def train_agent(agent, env, steps, outdir, max_episode_len=None,
                 logger.info('outdir:%s step:%s episode:%s R:%s',
                             outdir, t, episode_idx, episode_r)
                 logger.info('statistics:%s', agent.get_statistics())
-                if evaluator is not None:
-                    evaluator.evaluate_if_necessary(
-                        t=t, episodes=episode_idx + 1)
+                if evaluator is not None and evaluator.time_to_evaluate(t):
+                    evaluator.evaluate_and_update_max_score(
+                        t=t, episodes=episode_idx + 1,
+                        save_agent_if_best=(
+                            SavingCondition.best_evaluation_score
+                            in agent_saving_condition),
+                    )
+                    if SavingCondition.evaluation in agent_saving_condition:
+                        save_agent(agent, t, outdir, logger)
                     if (successful_score is not None and
                             evaluator.max_score >= successful_score):
                         break
@@ -82,19 +95,27 @@ def train_agent(agent, env, steps, outdir, max_episode_len=None,
                 done = False
 
     except Exception:
-        # Save the current model before being killed
-        save_agent(agent, t, outdir, logger, suffix='_except')
+        if SavingCondition.error in agent_saving_condition:
+            # Save the current model before being killed
+            save_agent(agent, t, outdir, logger, suffix='_except')
         raise
 
-    # Save the final model
-    save_agent(agent, t, outdir, logger, suffix='_finish')
+    if SavingCondition.completion in agent_saving_condition:
+        # Save the final model
+        save_agent(agent, t, outdir, logger, suffix='_finish')
 
 
 def train_agent_with_evaluation(
         agent, env, steps, eval_n_runs, eval_interval,
         outdir, max_episode_len=None, step_offset=0, eval_explorer=None,
         eval_max_episode_len=None, eval_env=None, successful_score=None,
-        step_hooks=[], logger=None):
+        step_hooks=[],
+        agent_saving_condition=(
+            SavingCondition.best_evaluation_score,
+            SavingCondition.completion,
+            SavingCondition.error,
+        ),
+        logger=None):
     """Train an agent while regularly evaluating it.
 
     Args:
@@ -142,4 +163,5 @@ def train_agent_with_evaluation(
         evaluator=evaluator,
         successful_score=successful_score,
         step_hooks=step_hooks,
+        agent_saving_condition=agent_saving_condition,
         logger=logger)
