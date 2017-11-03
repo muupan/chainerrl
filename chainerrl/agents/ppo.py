@@ -349,6 +349,12 @@ class PPO(agent.AttributeSavingMixin, agent.Agent):
                           len(self.memory),
                           self.n_episodes_in_memory)
         assert self.memory
+        # Skip if all the weights are zero
+        if np.count_nonzero([b['weight'] for b in self.memory]) == 0:
+            self.logger.info(
+                'update was skipped because all the weights are zero')
+            return
+
         xp = self.xp
         target_model = copy.deepcopy(self.model)
         # Compute explained variance
