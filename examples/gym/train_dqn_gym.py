@@ -58,7 +58,7 @@ def main():
     parser.add_argument('--steps', type=int, default=10 ** 5)
     parser.add_argument('--prioritized-replay', action='store_true')
     parser.add_argument('--episodic-replay', action='store_true')
-    parser.add_argument('--replay-start-size', type=int, default=None)
+    parser.add_argument('--replay-start-size', type=int, default=1000)
     parser.add_argument('--target-update-interval', type=int, default=10 ** 2)
     parser.add_argument('--target-update-method', type=str, default='hard')
     parser.add_argument('--soft-update-tau', type=float, default=1e-2)
@@ -138,11 +138,8 @@ def main():
     if args.episodic_replay:
         if args.minibatch_size is None:
             args.minibatch_size = 4
-        if args.replay_start_size is None:
-            args.replay_start_size = 10
         if args.prioritized_replay:
-            betasteps = \
-                (args.steps - timestep_limit * args.replay_start_size) \
+            betasteps = (args.steps - args.replay_start_size) \
                 // args.update_interval
             rbuf = replay_buffer.PrioritizedEpisodicReplayBuffer(
                 rbuf_capacity, betasteps=betasteps)
@@ -151,8 +148,6 @@ def main():
     else:
         if args.minibatch_size is None:
             args.minibatch_size = 32
-        if args.replay_start_size is None:
-            args.replay_start_size = 1000
         if args.prioritized_replay:
             betasteps = (args.steps - args.replay_start_size) \
                 // args.update_interval
