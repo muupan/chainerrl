@@ -40,7 +40,7 @@ from chainerrl import replay_buffer
 
 def main():
     import logging
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--outdir', type=str, default='dqn_out')
@@ -101,7 +101,7 @@ def main():
     timestep_limit = env.spec.tags.get(
         'wrapper_config.TimeLimit.max_episode_steps')
     obs_space = env.observation_space
-    obs_size = obs_space.low.size
+    obs_size = obs_space.n
     action_space = env.action_space
 
     if isinstance(action_space, spaces.Box):
@@ -128,7 +128,7 @@ def main():
 
     # Draw the computational graph and save it in the output directory.
     chainerrl.misc.draw_computational_graph(
-        [q_func(np.zeros_like(obs_space.low, dtype=np.float32)[None])],
+        [q_func(np.zeros(obs_size, dtype=np.float32)[None])],
         os.path.join(args.outdir, 'model'))
 
     opt = optimizers.Adam()
@@ -156,8 +156,12 @@ def main():
         else:
             rbuf = replay_buffer.ReplayBuffer(rbuf_capacity)
 
+    # def phi(obs):
+    #     return obs.astype(np.float32)
     def phi(obs):
-        return obs.astype(np.float32)
+        onehot = np.zeros(obs_space.n, dtype=np.float32)
+        onehot[obs] = 1
+        return onehot
 
     agent = DQN(q_func, opt, rbuf, gpu=args.gpu, gamma=args.gamma,
                 explorer=explorer, replay_start_size=args.replay_start_size,
