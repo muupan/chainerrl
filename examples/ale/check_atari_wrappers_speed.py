@@ -19,7 +19,7 @@ def check_speed(env, phi):
     start = timer()
     obs = env.reset()
     done = False
-    for _ in range(1000):
+    for _ in range(10000):
         x = phi(obs)
         assert x.shape == (4, 84, 84)
         obs, r, done, info = env.step(0)
