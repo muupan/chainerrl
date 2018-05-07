@@ -30,10 +30,10 @@ def check_speed(env, phi):
     print(timer() - start)
 
 
-# rom_name = 'pong'
-# env_name = 'PongNoFrameskip-v4'
-rom_name = 'breakout'
-env_name = 'BreakoutNoFrameskip-v4'
+rom_name = 'pong'
+env_name = 'PongNoFrameskip-v4'
+# rom_name = 'breakout'
+# env_name = 'BreakoutNoFrameskip-v4'
 
 print('rom name:', rom_name)
 print('env name:', env_name)
