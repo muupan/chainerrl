@@ -19,6 +19,7 @@ class PrioritizedBuffer (object):
         self.capacity = capacity
         self.data = collections.deque()
         self.data_priority = SumTreeQueue()
+        self.min_priority_queue = MinTreeQueue()
         self.max_priority = initial_max_priority
         self.wait_priority_after_sampling = wait_priority_after_sampling
         self.flag_wait_priority = False
@@ -35,10 +36,12 @@ class PrioritizedBuffer (object):
 
         self.data.append(value)
         self.data_priority.append(priority)
+        self.min_priority_queue.append(priority)
 
     def popleft(self):
         assert len(self) > 0
         self.data_priority.popleft()
+        self.min_priority_queue.popleft()
         return self.data.popleft()
 
     def _sample_indices_and_probabilities(self, n, uniform_ratio):
@@ -93,6 +96,7 @@ class PrioritizedBuffer (object):
         assert len(self.sampled_indices) == len(priority)
         for i, p in zip(self.sampled_indices, priority):
             self.data_priority[i] = p
+            self.min_priority_queue[i] = p
             self.max_priority = max(self.max_priority, p)
         self.flag_wait_priority = False
         self.sampled_indices = []
@@ -103,6 +107,12 @@ class PrioritizedBuffer (object):
         probabilities = [1 / len(self)] * len(indices)
         return indices, probabilities
 
+    def minimum_probability(self):
+        min_priority = self.min_priority_queue.sum()
+        sum_priority = self.data_priority.sum()
+        assert min_priority <= sum_priority, (min_priority, sum_priority)
+        return min_priority / sum_priority
+
 
 # Implement operations on nodes of SumTreeQueue
 
@@ -111,7 +121,7 @@ def _expand(node):
         node[:] = [], [], None
 
 
-def _reduce(node):
+def _reduce(node, reduce_op):
     assert node
     left_node, right_node, _ = node
     parent_value = []
@@ -120,12 +130,12 @@ def _reduce(node):
     if right_node:
         parent_value.append(right_node[2])
     if parent_value:
-        node[2] = sum(parent_value)
+        node[2] = reduce_op(parent_value)
     else:
         del node[:]
 
 
-def _write(index_left, index_right, node, key, value):
+def _write(index_left, index_right, node, key, value, reduce_op):
     if index_right - index_left == 1:
         if node:
             ret = node[2]
@@ -140,10 +150,12 @@ def _write(index_left, index_right, node, key, value):
         node_left, node_right, _ = node
         index_center = (index_left + index_right) // 2
         if key < index_center:
-            ret = _write(index_left, index_center, node_left, key, value)
+            ret = _write(index_left, index_center,
+                         node_left, key, value, reduce_op)
         else:
-            ret = _write(index_center, index_right, node_right, key, value)
-        _reduce(node)
+            ret = _write(index_center, index_right,
+                         node_right, key, value, reduce_op)
+        _reduce(node, reduce_op)
     return ret
 
 
@@ -164,7 +176,7 @@ def _find(index_left, index_right, node, pos):
                 index_center, index_right, node_right, pos - left_value)
 
 
-class SumTreeQueue(object):
+class SegmentTreeQueue(object):
     """Fast weighted sampling.
 
     queue-like data structure
@@ -174,13 +186,14 @@ class SumTreeQueue(object):
 
     # node = left_child, right_child, value
 
-    def __init__(self):
+    def __init__(self, reduce_op):
         self.length = 0
+        self.reduce_op = reduce_op
 
     def __setitem__(self, ix, val):
         assert 0 <= ix < self.length
         ixl, ixr = self.bounds
-        _write(ixl, ixr, self.root, ix, val)
+        _write(ixl, ixr, self.root, ix, val, reduce_op=self.reduce_op)
 
     def append(self, value):
         if self.length == 0:
@@ -195,7 +208,8 @@ class SumTreeQueue(object):
             _, _, root_value = root
             self.root = [self.root, [], root_value]
             ixr += ixr - ixl
-        ret = _write(ixl, ixr, self.root, self.length, value)
+        ret = _write(ixl, ixr, self.root, self.length, value,
+                     reduce_op=self.reduce_op)
         assert ret is None
         self.bounds = ixl, ixr
         self.length += 1
@@ -203,7 +217,8 @@ class SumTreeQueue(object):
     def popleft(self):
         assert self.length > 0
         ixl, ixr = self.bounds
-        ret = _write(ixl, ixr, self.root, 0, None)
+        ret = _write(ixl, ixr, self.root, 0, None,
+                     reduce_op=self.reduce_op)
         ixl -= 1
         ixr -= 1
         self.length -= 1
@@ -233,12 +248,14 @@ class SumTreeQueue(object):
             root = self.root
             ixl, ixr = self.bounds
             for ix in ixs:
-                val = _write(ixl, ixr, root, ix, 0.0)
+                val = _write(ixl, ixr, root, ix, 0.0,
+                             reduce_op=self.reduce_op)
                 vals.append(val)
 
         if not remove:
             for ix, val in zip(ixs, vals):
-                _write(ixl, ixr, root, ix, val)
+                _write(ixl, ixr, root, ix, val,
+                       reduce_op=self.reduce_op)
 
         return ixs, vals
 
@@ -251,15 +268,27 @@ class SumTreeQueue(object):
             ixl, ixr = self.bounds
             for _ in range(n):
                 ix = _find(ixl, ixr, root, np.random.uniform(0.0, root[2]))
-                val = _write(ixl, ixr, root, ix, 0.0)
+                val = _write(ixl, ixr, root, ix, 0.0,
+                             reduce_op=self.reduce_op)
                 ixs.append(ix)
                 vals.append(val)
 
         if not remove:
             for ix, val in zip(ixs, vals):
-                _write(ixl, ixr, root, ix, val)
+                _write(ixl, ixr, root, ix, val,
+                       reduce_op=self.reduce_op)
 
         return ixs, vals
+
+
+class SumTreeQueue(SegmentTreeQueue):
+    def __init__(self):
+        super().__init__(reduce_op=sum)
+
+
+class MinTreeQueue(SegmentTreeQueue):
+    def __init__(self):
+        super().__init__(reduce_op=min)
 
 
 # Deprecated
