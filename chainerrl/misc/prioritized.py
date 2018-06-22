@@ -147,6 +147,19 @@ def _write(index_left, index_right, node, key, value, op):
     return ret
 
 
+def _read(index_left, index_right, node, key):
+    if index_right - index_left == 1:
+        assert node
+        return node[2]
+    else:
+        node_left, node_right, _ = node
+        index_center = (index_left + index_right) // 2
+        if key < index_center:
+            return _read(index_left, index_center, node_left, key)
+        else:
+            return _read(index_center, index_right, node_right, key)
+
+
 class TreeQueue(object):
     """Queue with Binary Indexed Tree cache
 
@@ -165,6 +178,11 @@ class TreeQueue(object):
         assert 0 <= ix < self.length
         assert val is not None
         self._write(ix, val)
+
+    def __getitem__(self, ix):
+        assert 0 <= ix < self.length
+        ixl, ixr = self.bounds
+        return _read(ixl, ixr, self.root, ix)
 
     def _write(self, ix, val):
         ixl, ixr = self.bounds
@@ -264,15 +282,17 @@ class SumTreeQueue(TreeQueue):
         if n > 0:
             root = self.root
             ixl, ixr = self.bounds
-            for _ in range(n):
-                ix = _find(ixl, ixr, root, np.random.uniform(0.0, root[2]))
-                val = self._write(ix, 0.0)
+            p_sum = self.sum()
+            p_seg = p_sum / n
+            for i in range(n):
+                p_sample = i * p_seg + np.random.uniform(0.0, p_seg)
+                ix = _find(ixl, ixr, root, p_sample)
                 ixs.append(ix)
-                vals.append(val)
+                vals.append(self[ix])
 
-        if not remove:
+        if remove:
             for ix, val in zip(ixs, vals):
-                self._write(ix, val)
+                self._write(ix, 0.0)
 
         return ixs, vals
 
