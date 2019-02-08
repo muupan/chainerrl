@@ -130,13 +130,11 @@ class DQN(agent.AttributeSavingMixin, agent.BatchAgent):
                  logger=getLogger(__name__),
                  batch_states=batch_states):
         self.model = q_function
-        self.q_function = q_function  # For backward compatibility
 
         if gpu is not None and gpu >= 0:
             cuda.get_device(gpu).use()
             self.model.to_gpu(device=gpu)
 
-        self.xp = self.model.xp
         self.replay_buffer = replay_buffer
         self.optimizer = optimizer
         self.gamma = gamma
@@ -171,8 +169,6 @@ class DQN(agent.AttributeSavingMixin, agent.BatchAgent):
         self.last_action = None
         self.target_model = None
         self.sync_target_network()
-        # For backward compatibility
-        self.target_q_function = self.target_model
         self.average_q = 0
         self.average_q_decay = average_q_decay
         self.average_loss = 0
@@ -185,6 +181,18 @@ class DQN(agent.AttributeSavingMixin, agent.BatchAgent):
             raise ValueError(
                 'Replay start size cannot exceed '
                 'replay buffer capacity.')
+
+    @property
+    def q_function(self):
+        return self.model
+
+    @property
+    def target_q_function(self):
+        return self.target_model
+
+    @property
+    def xp(self):
+        return self.model.xp
 
     def sync_target_network(self):
         """Synchronize target network with current network."""
