@@ -41,19 +41,20 @@ install:
   - pip install opencv-python
   - pip install pybullet
   - pip install roboschool
+  - rm /home/travis/virtualenv/*/lib/python3.6/site-packages/roboschool/.libs/libQt5Core.so.5
   - python setup.py develop
   - python -c "import numpy; numpy.show_config()"
 # command to run tests
 script:
-  - flake8 chainerrl
-  - flake8 tests
-  - flake8 examples
-  - autopep8 -r chainerrl tests examples --diff | tee check_autopep8
-  - test ! -s check_autopep8
-  - pytest -m "not gpu and not slow" -x tests --cov=chainerrl
+  # - flake8 chainerrl
+  # - flake8 tests
+  # - flake8 examples
+  # - autopep8 -r chainerrl tests examples --diff | tee check_autopep8
+  # - test ! -s check_autopep8
+  # - pytest -m "not gpu and not slow" -x tests --cov=chainerrl
   - ./test_examples.sh -1
-  - if [[ $TRAVIS_PYTHON_VERSION == 3.6 && $CHAINER_VERSION == stable ]]; then
-      jupyter nbconvert --to notebook --execute examples/quickstart/quickstart.ipynb --ExecutePreprocessor.timeout=600;
-    fi
+  # - if [[ $TRAVIS_PYTHON_VERSION == 3.6 && $CHAINER_VERSION == stable ]]; then
+  #     jupyter nbconvert --to notebook --execute examples/quickstart/quickstart.ipynb --ExecutePreprocessor.timeout=600;
+  #   fi
 after_success:
   - coveralls
