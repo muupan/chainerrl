@@ -1,5 +1,5 @@
 language: python
-dist: xenial
+dist: bionic
 cache: pip
 python:
   - "2.7"
@@ -41,7 +41,6 @@ install:
   - pip install opencv-python
   - pip install pybullet
   - pip install roboschool
-  - rm /home/travis/virtualenv/*/lib/python3.6/site-packages/roboschool/.libs/libQt5Core.so.5
   - python setup.py develop
   - python -c "import numpy; numpy.show_config()"
 # command to run tests
