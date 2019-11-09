@@ -40,7 +40,7 @@ install:
   - pip install coveralls
   - pip install opencv-python
   - pip install pybullet
-  - pip install roboschool==1.0.46
+  - pip install roboschool
   - python setup.py develop
   - python -c "import numpy; numpy.show_config()"
 # command to run tests
